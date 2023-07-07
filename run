@@ -1,0 +1,88 @@
+#!/bin/sh
+
+main() {
+    # setup
+    import_env $@
+    update_max_fds
+
+    # exec
+    select_backend
+}
+
+die() {
+    echo $@ >&2
+    exit 1
+}
+
+import_env() {
+    unset _JAVA_OPTIONS
+    . ./env_id 2> /dev/null || die Error: No ID env file found: env_id
+
+    if [ $ID -ge 1000 ]; then
+      . ./env_cli 2>/dev/null || die Error: No environment file found: env
+    else
+      . ./env 2>/dev/null || die Error: No environment file found: env
+    fi
+
+    case $1 in
+        stop|compile|clean)
+            if [ -f $BACKEND/$1 ]; then
+                cd $BACKEND || exit 1
+                ./$1
+                exit 0
+            else
+                die Error: Invalid backend: $BACKEND
+            fi
+            ;;
+        clients)
+            export CLIENT=1
+            ;;
+        servers)
+            export CLIENT=0
+            ;;
+        *)
+            die Usage: $0 '<clients|servers|stop|compile|clean>'
+    esac
+    check_env
+}
+
+check_env() {
+    _NEED_ENV="LOCAL NUM_CLIENTS NUM_REPLICAS BATCH_SIZE ID BACKEND VERBOSE \
+        OPS_NUMBER MEASUREMENT_INTERVAL STATE_SIZE REPLY_SIZE REQUEST_SIZE \
+        REQUEST_SLEEP_MILLIS UPDATE_MAX_FDS COMPILE CONCURRENT_RQS CLIENTS_PER_POOL \
+        BATCH_TIMEOUT_MICROS BATCH_SLEEP_MICROS GLOBAL_BATCH_SIZE GLOBAL_BATCH_SLEEP_MICROS"
+
+    for var in $_NEED_ENV; do
+        if [ -z $(eval "echo \$$var") ]; then
+            if [ $var != "LOCAL" ] && [ $LOCAL -eq 1 ] && [ $var = "ID" ]; then
+                # ignore ID variable if we are running replicas locally
+                continue
+            fi
+            if [ $var = "ID" ] && [ $CLIENT -eq 1 ]; then
+                # ignore ID variable if we are running client nodes
+                continue
+            fi
+            die Error: Variable is unset in environment: $var
+        fi
+    done
+}
+
+update_max_fds() {
+    if [ $UPDATE_MAX_FDS -eq 1 ]; then
+        if [ $(id -u) -ne 0 ]; then
+            die Error: This script needs to be run as root.
+        fi
+
+        ulimit -n 65535 2>/dev/null
+        if [ $? -ne 0 ]; then
+            die Error: Failed to update max open file descriptors!
+        fi
+    fi
+}
+
+select_backend() {
+    cd $BACKEND 2>/dev/null || die Error: Invalid backend: $BACKEND
+    exec ./run
+}
+
+main $@

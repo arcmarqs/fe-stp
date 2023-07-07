@@ -1,0 +1,6 @@
+#!/bin/sh
+
+N=$(grep 'Exception in thread "main" java.lang.RuntimeException: Unable to build a communication system.' | wc -l)
+CODE=[ $N -eq 0 ]
+
+exit $CODE

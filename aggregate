@@ -1,0 +1,47 @@
+#!/bin/sh
+
+# config params
+REPLICAS="4 7 10 13"
+BATCHES="8 16 32 128 512 1024 2048"
+CLIENTS="1 10 30 60 100"
+BACKENDS="java rust"
+RESULTS="results"
+
+for results in $(echo $RESULTS); do
+    for backend in $(echo $BACKENDS); do
+        echo Compiling ${results}:${backend}
+
+        file=${results}_${backend}.csv
+        rm -f $file
+
+        # header
+        for no_replicas in $(echo $REPLICAS); do
+            for no_clients in $(echo $CLIENTS); do
+                printf ",%d" $no_replicas >> $file
+            done
+        done
+        printf "\n" >> $file
+        for no_replicas in $(echo $REPLICAS); do
+            for no_clients in $(echo $CLIENTS); do
+                printf ",%d" $no_clients >> $file
+            done
+        done
+        printf "\n" >> $file
+
+        # data
+        for batch_size in $(echo $BATCHES); do
+            for run_no in `seq 0 2`; do
+                if [ $run_no -eq 0 ]; then
+                    printf "%d" $batch_size >> $file
+                fi
+                for no_replicas in $(echo $REPLICAS); do
+                    for no_clients in $(echo $CLIENTS); do
+                        targetdir="${results}/backend=${backend}/r=${no_replicas}/b=${batch_size}/c=${no_clients}/run=${run_no}"
+                        printf ",%.2f" `cat ${targetdir}/replica_0_stdout | grep Throughput | tail -n-1 | cut -f7 -d' '` 2>/dev/null >> $file
+                    done
+                done
+                printf "\n" >> $file
+            done
+        done
+    done
+done

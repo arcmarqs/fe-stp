@@ -1,0 +1,84 @@
+#!/bin/bash
+
+mkdir -p config || exit
+cd config || exit
+
+echo "$BATCH_SIZE" > batch.config
+
+REPLICAS=("10.0.10.1" "10.0.10.2" "10.0.10.3" "10.0.10.4")
+
+#REPLICAS=("127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1")
+
+#REPLICAS_SAFE_CLUSTER_IPS="127.0.0.1 127.0.0.1 127.0.0.1 127.0.0.1"
+
+#10gbe
+#CLIENT_MACHINES="10.11.12.5 192.168.70.16"
+
+#1gbe
+CLIENT_MACHINES="127.0.0.1"
+#CLIENT_MACHINES=("10.0.10.5" "10.0.10.6" "10.0.10.7")
+
+#rm -f replicas.config
+
+#CURR_IP=0
+#for id in $(seq 0 $(expr "$NUM_REPLICAS" - 1)); do
+#    sni=srv${id}
+#    port=$(expr 10000 + "$id")
+#    rep_port=$(expr 12000 + "$id")
+#    host=$(expr "$id" % 4)
+
+    #1gbe
+    #host=$(expr 24 + $host)
+    #echo $id $sni 192.168.85.$host $port $rep_port >> replicas.config
+
+    #10gbe
+#    echo "$id" "$sni" "${REPLICAS[$CURR_IP]}" "$port" "$rep_port" >> replicas.config
+
+#    CURR_IP=$(expr $CURR_IP + 1)
+#done
+
+if [[ ! -v MAX_CLIENTS ]]; then
+  MAX_CLIENTS=$NUM_CLIENTS
+fi
+
+# Get the line count of a file if the file exists, otherwise set it to 0
+LINE_COUNT=$(wc -l < clients.config)
+
+# If that checks if LINE_COUNT is a number, if so check if it is above or equal to $CLIENT_GEN and if so not execute the following block
+if [[ $LINE_COUNT =~ ^[0-9]+$ ]] && [[ $LINE_COUNT -ge $CLIENT_GEN ]]; then
+
+  #Check if the first line of the clients.config file contains an IP contained in the CLIENT_MACHINES array
+
+  for value in "${CLIENT_MACHINES[@]}"
+  do
+    echo "$value"
+    if [[ "$value" =~ $(head -n 1 clients.config | awk '{print $3}') ]]; then
+      echo "clients.config already exists and has $LINE_COUNT lines, not generating new clients"
+
+      exit 0
+    fi
+  done
+
+fi
+
+rm -f clients.config
+#Replicas have all IPS stored
+CURR_MACHINE=0
+TO_GEN_PER_MACHINE=$(expr $CLIENT_GEN / ${#CLIENT_MACHINES[@]})
+
+echo "To generate per machine $TO_GEN_PER_MACHINE"
+
+for ip in "${CLIENT_MACHINES[@]}"
+do
+  echo "$ip"
+
+  FIRST_CLI="$(expr 1000 \* "$(expr $CURR_MACHINE + 1)")"
+  for i in $(seq 0 $(expr "$TO_GEN_PER_MACHINE" - 1)); do
+    id=$(expr $FIRST_CLI + "$i")
+    sni=cli${id}
+    port=$(expr 10000 + "$id")
+    echo "$id" "$sni" "$ip" "$port" >> clients.config
+  done
+
+  CURR_MACHINE=$(expr $CURR_MACHINE + 1)
+done

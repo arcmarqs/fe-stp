@@ -1,0 +1,22 @@
+#!/bin/sh
+
+mkdir -p config
+cd config
+
+echo $BATCH_SIZE > batch.config
+
+rm -f clients.config
+for i in `seq 0 $(expr $CLIENT_GEN - 1)`; do
+    id=$(expr 1000 + $i)
+    sni=cli${id}
+    port=$(expr 11000 + $i)
+    echo $id $sni 127.0.0.1 $port >> clients.config
+done
+
+rm -f replicas.config
+for id in `seq 0 $(expr $NUM_REPLICAS - 1)`; do
+    sni=srv${id}
+    port=$(expr 10000 + $id)
+    rep_port=$(expr 12000 + $id)
+    echo $id $sni 127.0.0.1 $port $rep_port >> replicas.config
+done

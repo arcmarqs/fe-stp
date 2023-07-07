@@ -1,0 +1,92 @@
+#!/bin/bash
+
+main() {
+    generate_conf
+    compile
+    #delete_log
+    select_test_name
+    exec_microbenchmarks
+}
+
+delete_log() {
+  rm -rf ./log/
+}
+
+generate_conf() {
+    if [ $LOCAL -eq 1 ]; then
+        ./generate_conf_local || exit 1
+    else
+        ./generate_conf_cop || exit 1
+    fi
+
+    if [ ! -f ca-root/crt ]; then
+      echo "Missing ca certificates, generating them".
+      ./ca || exit 1
+    fi
+
+    if [ ! -f config/clients.config ]; then
+        echo Error: Missing config/clients.config! >&2
+        exit 1
+    fi
+
+    if [ ! -f config/replicas.config ]; then
+        echo Error: Missing config/replicas.config! >&2
+        exit 1
+    fi
+
+    if [ ! -f config/batch.config ]; then
+        echo Error: Missing config/batch.config! >&2
+        exit 1
+    fi
+}
+
+compile() {
+    [ $COMPILE -eq 1 ] && ./compile
+}
+
+select_test_name() {
+  #Create a monotonically increasing ID which stores its previous state in a file
+  #This is used to generate unique test names, and should match across machines
+
+  FILE="config/previd${ID}"
+
+  #If the file previd doesn't exist, create it
+  if [ ! -f $FILE ]; then
+    echo 0 > $FILE
+  fi
+
+  #Read the previous ID from previd file
+  prev_id=$(cat $FILE)
+
+  #Increment the ID
+  new_id=$((prev_id+1))
+
+  #Write the new ID to the previd file
+  echo $new_id > $FILE
+
+  export INFLUX_EXTRA_TEST=$(printf "%05d" $new_id)
+
+  echo "Test label: ${INFLUX_EXTRA_TEST}"
+}
+
+exec_microbenchmarks() {
+
+  PIDS=()
+
+  if [ $ID -ge 1000 ]; then
+    for i in $(seq 0 "$(expr "$NUM_CLIENTS" - 1)"); do
+      exec ./target/release/microbenchmarks-async "$(expr $ID + $i)" &
+      PID1=$!
+      PIDS+=("$PID1")
+    done
+
+    for pid in ${PIDS[*]}; do
+      wait $pid
+    done
+  else
+    exec ./target/release/microbenchmarks-async
+  fi
+}
+
+main
+#sudo apt install linux-tools-5.15 && echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid

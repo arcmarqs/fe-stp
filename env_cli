@@ -1,0 +1,41 @@
+export LOCAL=0
+export COMPILE=1
+
+export BACKEND=rust
+export VERBOSE=false
+export UPDATE_MAX_FDS=0
+
+export NUM_CLIENTS=15
+export CLIENT_GEN=3000
+export NUM_REPLICAS=4
+export BATCH_SIZE=1024
+export MAX_BATCH_SIZE=49000
+export CLIENTS_PER_POOL=1000
+
+#Global batch size from all joined client pools
+export GLOBAL_BATCH_SIZE=5000
+export GLOBAL_BATCH_SLEEP_MICROS=250
+
+export THREADPOOL_THREADS=2
+export MIO_WORKER_COUNT=1
+export ASYNC_THREADS=2
+
+#1 ms batch timeout
+export BATCH_TIMEOUT_MICROS=100
+#1 ms sleep between client pool collections
+export BATCH_SLEEP_MICROS=100
+
+export OPS_NUMBER=3000000
+export CONCURRENT_RQS=100
+export MEASUREMENT_INTERVAL=20000
+
+export STATE_SIZE=0
+export REPLY_SIZE=0
+export REQUEST_SIZE=0
+export REQUEST_SLEEP_MILLIS=0
+
+export RUST_LOG=INFO
+
+#export ID=0
+
+export PATH_TO_OS_STATS="/home/${USER}/febft_results/os_stats_bin"

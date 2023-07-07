@@ -1,0 +1,237 @@
+#!/bin/sh
+
+# avoid accidentally terminating benchmarks
+trap '' INT
+
+# helper funs
+log() {
+    echo $(date): $@ >&2
+}
+
+smallcooldown() {
+    log Waiting 'for' 5 seconds
+    sleep 5
+}
+
+mediumcooldown() {
+    log Waiting 'for' 15 seconds
+    sleep 15
+}
+
+bigcooldown() {
+    log Waiting 'for' 1 minute
+    sleep 60
+}
+
+cmd() {
+    cop=$1
+    shift
+    sudo -u tcarvalho ssh $cop -- $@
+}
+
+################################################################################
+
+# config params
+OPS_NUMBER=10000
+MEASUREMENT_INTERVAL=2000
+
+STATE_SIZE=0
+REQUEST_SIZE=1
+REPLY_SIZE=$REQUEST_SIZE
+REQUEST_SLEEP_MILLIS=0
+
+REPLICAS="4"
+BATCHES="8 16 32 128 512 1024 2048"
+CLIENTS="1 10 30 60 100"
+RESULTS=results
+
+# generate_env <backend> <num clients> <num replicas> <batch size>
+generate_env() {
+    cat << EOF
+export LOCAL=0
+export COMPILE=0
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64/bin/java
+
+export BACKEND=$1
+export VERBOSE=false
+export UPDATE_MAX_FDS=1
+
+export NUM_CLIENTS=$2
+export NUM_REPLICAS=$3
+export BATCH_SIZE=$4
+
+export OPS_NUMBER=$OPS_NUMBER
+export MEASUREMENT_INTERVAL=$MEASUREMENT_INTERVAL
+
+export STATE_SIZE=$STATE_SIZE
+export REPLY_SIZE=$REPLY_SIZE
+export REQUEST_SIZE=$REQUEST_SIZE
+export REQUEST_SLEEP_MILLIS=$REQUEST_SLEEP_MILLIS
+EOF
+}
+
+################################################################################
+
+# abort execution if we are not orchestrating this benchmark
+# from the cop-gpu node, which will launch all replicas and
+# execute its clients
+if [ "${HOSTNAME%%\.*}" != "cop-gpu" ]; then
+    echo Invalid host detected. Please run this script from cop-gpu.
+    exit 1
+fi
+
+if [ "$USER" != "tcarvalho" ]; then
+    echo Invalid user detected. Please run this script as tcarvalho.
+    exit 1
+fi
+
+# cd to <testing grounds repo>/microbenchmarks
+cd "$(dirname $0)"
+
+# update git repo
+git pull
+
+if [ ! -d "rust/ca-root" ]; then
+    echo No CA root found. Please regenerate it.
+    exit 1
+fi
+
+# ask to continue
+echo "Run tests? This will purge any old results!"
+while true; do
+    read -p "(y/n)?" yn
+    case $yn in
+        [Yy]*)
+            break
+            ;;
+        [Nn]*)
+            exit 0
+            ;;
+        *)
+            echo "Please answer (y)es or (n)o."
+            ;;
+    esac
+done
+
+# kill old replica processes, if
+# an error occurred before
+for i in `seq 1 4`; do
+    cop=cop0${i}
+    log Killing all replicas 'in' $cop
+    cmd $cop sudo pkill -f microbenchmarks >/dev/null 2>/dev/null &
+    cmd $cop sudo pkill -f bft-smart >/dev/null 2>/dev/null &
+done
+smallcooldown
+
+# execute benchmarks
+rm -rf $RESULTS # purge old results
+mkdir -p $RESULTS
+
+log Beginning tests
+for backend in java rust; do
+    log Init of benchmarking backend $backend
+
+    for no_replicas in $(echo $REPLICAS); do
+        log Init of benchmarking $no_replicas replicas
+
+        for batch_size in $(echo $BATCHES); do
+            log Init of testing a batch size of $batch_size
+
+            for no_clients in $(echo $CLIENTS); do
+                log Init of benchmarking $no_clients clients
+
+                # generate environment files
+                log Generating 'local' environment file
+                generate_env $backend $no_clients $no_replicas $batch_size > env
+
+                for i in `seq 1 4`; do
+                    cop=cop0${i}
+                    log Generating remote environment file 'for' $cop
+                    generate_env $backend $no_clients $no_replicas $batch_size | cmd $cop 'cat > tg/microbenchmarks/env'
+                done
+
+                # rebuild software
+                ./run compile
+                for i in `seq 1 4`; do
+                    cop=cop0${i}
+                    cmd $cop '. .cargo/env; cd tg; git pull; cd microbenchmarks; ./run compile'
+                    if [ $? -ne 0 ]; then
+                        log Error: "Compile error in $cop"
+                        exit 1
+                    fi
+                done
+
+                # wait for systems to recover
+                bigcooldown
+
+                # run each test 3 times
+                for run_no in `seq 0 2`; do
+                    log Init of run no. $run_no
+
+                    targetdir="${RESULTS}/backend=${backend}/r=${no_replicas}/b=${batch_size}/c=${no_clients}/run=${run_no}"
+                    start=${targetdir}/start
+                    end=${targetdir}/end
+
+                    mkdir -p $targetdir
+                    date +%s > $start
+
+                    log Run no. $run_no: Benchmarking with params: backend=$backend r=$no_replicas b=$batch_size c=$no_clients
+
+                    # start replicas in cop0?
+                    for i in `seq 0 $(expr $no_replicas - 1)`; do
+                        ippart=$(expr $i % 4)
+                        cop=cop0$(expr $ippart + 1)
+                        ip=192.168.70.$(expr 16 + $ippart)
+
+                        log Starting replica id=$i 'in' $cop "($ip)"
+                        cmd $cop "cd tg/microbenchmarks; sudo env ID=$i ./run servers" \
+                            >${targetdir}/replica_${i}_stdout 2>${targetdir}/replica_${i}_stderr &
+                        if [ $? -ne 0 ]; then
+                            log Error: "Couldn't start replica $i in $cop"
+                            exit 1
+                        fi
+
+                        smallcooldown
+                    done
+                    mediumcooldown
+
+                    # start clients in cop-gpu
+                    log "Executing clients; check ${targetdir} for more details"
+                    sudo timeout 90m ./run clients >${targetdir}/clients_stdout 2>${targetdir}/clients_stderr
+
+                    if [ $? -eq 0 ]; then
+                        # move clients' latency file to target directory
+                        mv ${backend}/latencies* ${targetdir}/
+
+                        log Finished run $run_no
+                    else
+                        # signal this run was unsuccessful
+                        touch ${targetdir}/error
+
+                        log Error: "Clients exited with an error, check their stderr; skipping to next test case"
+                    fi
+                    date +%s > $end
+
+                    # kill replicas
+                    for i in `seq 1 4`; do
+                        cop=cop0${i}
+                        log Killing all replicas 'in' $cop
+                        cmd $cop "cd tg/microbenchmarks; sudo ./run stop" >/dev/null 2>/dev/null &
+                    done
+
+                    bigcooldown
+                done
+
+                log Finished benchmarking $no_clients clients
+            done
+
+            log Finished benchmarking a batch size of $batch_size
+        done
+
+        log Finished benchmarking $no_replicas replicas
+    done
+
+    log Finished benchmarking backend $backend
+done
+
+log All tests have finished executing
