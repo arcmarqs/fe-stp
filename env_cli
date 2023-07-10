@@ -1,16 +1,16 @@
-export LOCAL=0
+export LOCAL=1
 export COMPILE=1
 
 export BACKEND=rust
 export VERBOSE=false
 export UPDATE_MAX_FDS=0
 
-export NUM_CLIENTS=15
-export CLIENT_GEN=3000
+export NUM_CLIENTS=10
+export CLIENT_GEN=100
 export NUM_REPLICAS=4
 export BATCH_SIZE=1024
-export MAX_BATCH_SIZE=49000
-export CLIENTS_PER_POOL=1000
+export MAX_BATCH_SIZE=5000
+export CLIENTS_PER_POOL=10
 
 #Global batch size from all joined client pools
 export GLOBAL_BATCH_SIZE=5000
@@ -25,8 +25,8 @@ export BATCH_TIMEOUT_MICROS=100
 #1 ms sleep between client pool collections
 export BATCH_SLEEP_MICROS=100
 
-export OPS_NUMBER=3000000
-export CONCURRENT_RQS=100
+export OPS_NUMBER=300000
+export CONCURRENT_RQS=1
 export MEASUREMENT_INTERVAL=20000
 
 export STATE_SIZE=0

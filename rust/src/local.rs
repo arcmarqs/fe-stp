@@ -23,7 +23,7 @@ use atlas_common::node_id::NodeId;
 use atlas_communication::tcpip::{PeerAddr, TcpNode};
 
 use crate::common::*;
-use crate::serialize::{MicrobenchmarkData, Request};
+use crate::serialize::{KvData, Action};
 
 pub fn main() {
     let is_client = std::env::var("CLIENT")
@@ -272,169 +272,12 @@ fn sk_stream() -> impl Iterator<Item=KeyPair> {
     })
 }
 
-fn run_client(mut client: Client<MicrobenchmarkData, ClientNetworking>, q: Arc<AsyncSender<String>>) {
+fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<String>>) {
     let concurrent_rqs: usize = get_concurrent_rqs();
 
     let id = u32::from(client.id());
 
     println!("Warm up...");
 
-    let request = Arc::new({
-        let mut r = vec![0; MicrobenchmarkData::REQUEST_SIZE];
-        r
-    });
-
-    let semaphore = Arc::new(RawSemaphore::new(concurrent_rqs));
-
-    let iterator = 0..(MicrobenchmarkData::OPS_NUMBER / 2);
-
-    let mut ramp_up = 1000;
-
-    for req in iterator {
-
-        //Only allow concurrent_rqs per client at the network
-        semaphore.acquire();
-
-        if MicrobenchmarkData::VERBOSE {
-            println!("{:?} // Sending req {}...", client.id(), req);
-        }
-
-        let last_send_instant = Utc::now();
-
-        let sem_clone = semaphore.clone();
-
-        let q = q.clone();
-
-        client.clone().update_callback::<Ordered>(Request::new(MicrobenchmarkData::REQUEST), Box::new(move |reply| {
-
-            //Release another request for this client
-            sem_clone.release();
-
-            let latency = Utc::now()
-                .signed_duration_since(last_send_instant)
-                .num_nanoseconds()
-                .unwrap_or(i64::MAX);
-
-            let time_ms = Utc::now().timestamp_millis();
-
-            /*let _ = q.enqueue(
-                format!(
-                    "{}\t{}\t{}\n",
-                    id,
-                    time_ms,
-                    latency,
-                ),
-            );*/
-
-            if MicrobenchmarkData::VERBOSE {
-                if req % 1000 == 0 {
-                    println!("{} // {} operations sent!", id, req);
-                }
-
-                println!(" sent!");
-            }
-        }));
-
-        if MicrobenchmarkData::REQUEST_SLEEP_MILLIS != Duration::ZERO {
-            std::thread::sleep(MicrobenchmarkData::REQUEST_SLEEP_MILLIS);
-        } else if ramp_up > 0 {
-            let to_sleep = fastrand::u32(ramp_up / 2..ramp_up);
-            std::thread::sleep(Duration::from_millis(to_sleep as u64));
-
-            ramp_up -= 100;
-        }
-    }
-
-    println!("Executing experiment for {} ops", MicrobenchmarkData::OPS_NUMBER / 2);
-
-    let iterator = 0..(MicrobenchmarkData::OPS_NUMBER / 2);
-
-    //let mut st = BenchmarkHelper::new(client.id(), MicrobenchmarkData::OPS_NUMBER / 2);
-
-    for req in iterator {
-        semaphore.acquire();
-
-        if MicrobenchmarkData::VERBOSE {
-            print!("Sending req {}...", req);
-        }
-
-        let q = q.clone();
-
-        let last_send_instant = Utc::now();
-
-        let sem_clone = semaphore.clone();
-
-        client.clone().update_callback::<Ordered>(Request::new(MicrobenchmarkData::REQUEST),
-                                                  Box::new(move |reply| {
-
-                                                      //Release another request for this client
-                                                      sem_clone.release();
-
-                                                      /* let latency = Utc::now()
-                                                          .signed_duration_since(last_send_instant)
-                                                          .num_nanoseconds()
-                                                          .unwrap_or(i64::MAX);
-
-                                                      let time_ms = Utc::now().timestamp_millis();*/
-
-                                                      /*let _ = q.enqueue(
-                                                          format!(
-                                                              "{}\t{}\t{}\n",
-                                                              id,
-                                                              time_ms,
-                                                              latency,
-                                                          ),
-                                                      );*/
-
-                                                      //(exec_time, last_send_instant).store(st);
-
-                                                      if MicrobenchmarkData::VERBOSE {
-                                                          if req % 1000 == 0 {
-                                                              println!("{} // {} operations sent!", id, req);
-                                                          }
-
-                                                          println!(" sent!");
-                                                      }
-                                                  }));
-
-        if MicrobenchmarkData::REQUEST_SLEEP_MILLIS != Duration::ZERO {
-            std::thread::sleep(MicrobenchmarkData::REQUEST_SLEEP_MILLIS);
-        }
-    }
-
-    //Wait for all requests to finish
-    for _ in 0..concurrent_rqs {
-        semaphore.acquire();
-    }
-
-    println!("{:?} // Done.", client.id());
-
-    /*
-    if id == 1000 {
-        println!("{} // Average time for {} executions (-10%) = {} us",
-                 id,
-                 MicrobenchmarkData::OPS_NUMBER / 2,
-                 st.average(true, false) / 1000.0);
-
-        println!("{} // Standard deviation for {} executions (-10%) = {} us",
-                 id,
-                 MicrobenchmarkData::OPS_NUMBER / 2,
-                 st.standard_deviation(true, true) / 1000.0);
-
-        println!("{} // Average time for {} executions (all samples) = {} us",
-                 id,
-                 MicrobenchmarkData::OPS_NUMBER / 2,
-                 st.average(false, true) / 1000.0);
-
-        println!("{} // Standard deviation for {} executions (all samples) = {} us",
-                 id,
-                 MicrobenchmarkData::OPS_NUMBER / 2,
-                 st.standard_deviation(false, true) / 1000.0);
-
-        println!("{} // Maximum time for {} executions (all samples) = {} us",
-                 id,
-                 MicrobenchmarkData::OPS_NUMBER / 2,
-                 st.max(false) / 1000);
-    }
-    */
+    
 }

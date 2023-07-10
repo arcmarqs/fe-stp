@@ -5,7 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage};
+use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -33,39 +33,14 @@ use atlas_divisible_state::*;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_metrics::metrics::metric_duration;
 
-
-use crate::config::StateTransferConfig;
-use crate::message::{CstMessage, CstMessageKind};
-use crate::message::serialize::CSTMsg;
-use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
-
 pub mod message;
 
 
 
 pub struct StateTransferConfig {
-    pub timout_duration: Duration
+    pub timeout_duration: Duration
 }
 
-/// The state of the checkpoint
-pub enum CheckpointState<D> {
-    // no checkpoint has been performed yet
-    None,
-    // we are calling this a partial checkpoint because we are
-    // waiting for the application state from the execution layer
-    Partial {
-        // sequence number of the last executed request
-        seq: SeqNo,
-    },
-    PartialWithEarlier {
-        // sequence number of the last executed request
-        seq: SeqNo,
-        // save the earlier checkpoint, in case corruption takes place
-        earlier: Arc<ReadOnly<Checkpoint<D>>>,
-    },
-    // application state received, the checkpoint state is finalized
-    Complete(Arc<ReadOnly<Checkpoint<D>>>),
-}
 
 enum ProtoPhase<S> {
     Init,
@@ -93,53 +68,12 @@ impl<S> Debug for ProtoPhase<S> {
     }
 }
 
-/// Contains state used by a recovering node.
-///
-/// Cloning this is better than it was because of the read only checkpoint,
-/// and because decision log also got a lot easier to clone, but we still have
-/// to be very careful thanks to the requests vector, which can be VERY large
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct RecoveryState<S> {
-    pub checkpoint: Arc<ReadOnly<AppStateMessage<S>>>,
-}
-
-impl<S> RecoveryState<S> {
-    /// Creates a new `RecoveryState`.
-    pub fn new(
-        checkpoint: Arc<ReadOnly<AppStateMessage<S>>>,
-    ) -> Self {
-        Self {
-            checkpoint,
-        }
-    }
-
-    /// Returns the local checkpoint of this recovery state.
-    pub fn checkpoint(&self) -> &Arc<ReadOnly<AppStateMessage<S>>> {
-        &self.checkpoint
-    }
-}
-
-struct ReceivedState<S> {
-    count: usize,
-    state: RecoveryState<S>,
-}
-
-struct ReceivedStateCid {
-    cid: SeqNo,
-    count: usize,
-}
-
 // NOTE: in this module, we may use cid interchangeably with
 // consensus sequence number
-/// The collaborative state transfer algorithm.
-///
-/// The implementation is based on the paper «On the Efﬁciency of
-/// Durable State Machine Replication», by A. Bessani et al.
 pub struct BtStateTransfer<S, NT, PL>
     where S: DivisibleState + 'static {
     curr_seq: SeqNo,
-    current_checkpoint_state: CheckpointState<S>,
+    root_digest: Digest,
     largest_cid: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -149,72 +83,12 @@ pub struct BtStateTransfer<S, NT, PL>
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
-    received_states: HashMap<Digest, ReceivedState<S>>,
-    received_state_ids: HashMap<Digest, ReceivedStateCid>,
     phase: ProtoPhase<S>,
 
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
     /// Persistent logging for the state transfer protocol.
     persistent_log: PL,
-}
-
-/// Status returned from processing a state transfer message.
-pub enum CstStatus<S> {
-    /// We are not running the CST protocol.
-    ///
-    /// Drop any attempt of processing a message in this condition.
-    Nil,
-    /// The CST protocol is currently running.
-    Running,
-    /// We should request the latest cid from the view.
-    RequestStateCid,
-    /// We have received and validated the largest state sequence
-    /// number available.
-    SeqNo(SeqNo),
-    /// We should request the latest state from the view.
-    RequestState,
-    /// We have received and validated the state from
-    /// a group of replicas.
-    State(RecoveryState<S>),
-}
-
-impl<S> Debug for CstStatus<S> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CstStatus::Nil => {
-                write!(f, "Nil")
-            }
-            CstStatus::Running => {
-                write!(f, "Running")
-            }
-            CstStatus::RequestStateCid => {
-                write!(f, "Request latest CID")
-            }
-            CstStatus::RequestState => {
-                write!(f, "Request latest state")
-            }
-            CstStatus::SeqNo(seq) => {
-                write!(f, "Received seq no {:?}", seq)
-            }
-            CstStatus::State(_) => {
-                write!(f, "Received state")
-            }
-        }
-    }
-}
-
-/// Represents progress in the CST state machine.
-///
-/// To clarify, the mention of state machine here has nothing to do with the
-/// SMR protocol, but rather the implementation in code of the CST protocol.
-pub enum CstProgress<S> {
-    // TODO: Timeout( some type here)
-    /// This value represents null progress in the CST code's state machine.
-    Nil,
-    /// We have a fresh new message to feed the CST state machine, from
-    /// the communication layer.
-    Message(Header, CstMessage<S>),
 }
 
 macro_rules! getmessage {
@@ -791,14 +665,34 @@ impl<S, NT, PL> BtStateTransfer<S, NT, PL>
     }
 }
 
+impl<S, NT, PL> DivisibleStateTransfer<S, NT, PL> for BtStateTransfer<S, NT, PL>
+where
+    S: DivisibleState + 'static,
+    PL: DivisibleStateLog<S>,
+{
+    type Config = StateTransferConfig;
 
-impl DivisibleStateTransfer for BtStateTransfer 
-where S: DivisibleState {
+    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>, log: PL,
+                  executor_state_handle: ChannelSyncTx<InstallStateMessage<S>>) -> Result<Self>
+        where Self: Sized {
+        todo!()
+    }
 
+    fn handle_state_received_from_app<D, OP, LP>(&mut self,
+                                                 descriptor: <S as DivisibleState>::StateDescriptor,
+                                                 state: Vec<<S as DivisibleState>::StatePart>) -> Result<()>
+        where D: ApplicationData + 'static,
+              OP: OrderingProtocolMessage + 'static,
+              LP: LogTransferMessage + 'static,
+              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
+        todo!()
+    }
 }
 
 impl<S, NT, PL> PersistableStateTransferProtocol for BtStateTransfer<S, NT, PL>
-    where S: DivisibleState + 'static {}
+    where S: DivisibleState + 'static{
+
+    }
 
 
 impl<S> Orderable for CheckpointState<S> {

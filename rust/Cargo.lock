@@ -240,10 +240,10 @@ dependencies = [
  "rand_core",
  "rayon",
  "ring",
- "rocksdb",
  "rustls 0.21.2",
  "serde",
  "serde-big-array",
+ "sled",
  "socket2",
  "thiserror",
  "thread_local",
@@ -259,7 +259,7 @@ version = "0.1.0"
 dependencies = [
  "atlas-common",
  "atlas-metrics",
- "bincode",
+ "bincode 2.0.0-rc.3",
  "bytes",
  "chrono",
  "crossbeam-skiplist",
@@ -326,7 +326,7 @@ dependencies = [
  "atlas-core",
  "atlas-execution",
  "atlas-metrics",
- "bincode",
+ "bincode 2.0.0-rc.3",
  "capnp",
  "log",
  "serde",
@@ -357,7 +357,7 @@ dependencies = [
  "atlas-core",
  "atlas-execution",
  "atlas-metrics",
- "bincode",
+ "bincode 2.0.0-rc.3",
  "capnp",
  "log",
  "serde",
@@ -410,6 +410,15 @@ name = "base64"
 version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "604178f6c5c21f02dc555784810edfb88d34ac2c73b2eae109655649ee73ce3d"
+
+[[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bincode"
@@ -889,6 +898,7 @@ dependencies = [
  "atlas-metrics",
  "atlas-persistent-log",
  "atlas-replica",
+ "bincode 1.3.3",
  "capnp",
  "capnpc",
  "chrono",
@@ -898,6 +908,7 @@ dependencies = [
  "futures-timer",
  "intmap",
  "konst",
+ "log",
  "mimalloc",
  "mprober-lib",
  "nolock",
@@ -962,7 +973,7 @@ dependencies = [
 name = "febft-communication"
 version = "0.1.0"
 dependencies = [
- "bincode",
+ "bincode 2.0.0-rc.3",
  "bytes",
  "chrono",
  "dashmap",
@@ -1017,7 +1028,7 @@ name = "febft-pbft-consensus"
 version = "0.1.0"
 dependencies = [
  "async-tls",
- "bincode",
+ "bincode 2.0.0-rc.3",
  "bytes",
  "capnp",
  "chrono",

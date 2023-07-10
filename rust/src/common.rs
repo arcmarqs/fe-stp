@@ -32,18 +32,19 @@ use atlas_log_transfer::config::LogTransferConfig;
 use atlas_log_transfer::messages::serialize::LTMsg;
 use atlas_metrics::benchmarks::CommStats;
 use atlas_metrics::InfluxDBArgs;
-use atlas_persistent_log::{PersistentLog};
+use atlas_persistent_log::{PersistentLog, DivisibleStatePersistentLog};
 use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use febft_pbft_consensus::bft::{PBFTOrderProtocol};
 use febft_pbft_consensus::bft::config::{PBFTConfig, ProposerConfig};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use atlas_replica::config::{DivisibleStateReplicaConfig, ReplicaConfig};
 use atlas_replica::server::{Replica};
-use atlas_replica::server::divisible_state_server;
+use atlas_replica::server::divisible_state_server::{self, DivStReplica};
 
 use crate::exec::Microbenchmark;
-use crate::serialize::{MicrobenchmarkData, State};
-use crate::stp;
+use crate::serialize::{MicrobenchmarkData, State, KvData};
+use crate::stp::{self, BtStateTransfer, StateTransferConfig};
+use crate::stp::message::serialize::CSTMsg;
 
 #[macro_export]
 macro_rules! addr {
@@ -262,14 +263,14 @@ pub type ReplicaNetworking = MIOTcpNode<ServiceMsg<MicrobenchmarkData, OrderProt
 pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<MicrobenchmarkData>>;
 
 /// Set up the persistent logging type with the existing data handles
-pub type Logging = MonStatePersistentLog<State, MicrobenchmarkData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
+pub type Logging = DivisibleStatePersistentLog<State, MicrobenchmarkData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
-pub type OrderProtocol = PBFTOrderProtocol<MicrobenchmarkData, StateTransferMessage, LogTransferMessage, ReplicaNetworking, Logging>;
+pub type OrderProtocol = PBFTOrderProtocol<MicrobenchmarkData, StateTransferMessage, ReplicaNetworking>;
 pub type LogTransferProtocol = CollabLogTransfer<MicrobenchmarkData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type StateTransferProtocol = CollabStateTransfer<State, ReplicaNetworking, Logging>;
+pub type StateTransferProtocol = BtStateTransfer<State, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = MonReplica<State, Microbenchmark, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = DivStReplica<State, Microbenchmark, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
 
 pub async fn setup_client(
     n: usize,
@@ -278,7 +279,7 @@ pub async fn setup_client(
     addrs: IntMap<PeerAddr>,
     pk: IntMap<PublicKey>,
     comm_stats: Option<Arc<CommStats>>,
-) -> Result<Client<MicrobenchmarkData, ClientNetworking>> {
+) -> Result<Client<KvData, ClientNetworking>> {
     let node = node_config(n, id, sk, addrs, pk, comm_stats).await;
 
     let conf = client::ClientConfig {
@@ -351,13 +352,13 @@ pub async fn setup_replica(
         p: Default::default(),
     };
 
-    let mon_conf = MonolithicStateReplicaConfig {
+    let div_conf = DivisibleStateReplicaConfig {
         service,
         replica_config: conf,
         st_config,
     };
 
-    MonReplica::bootstrap(mon_conf).await
+    DivStReplica::bootstrap(div_conf).await
 }
 
 async fn get_batch_size() -> usize {

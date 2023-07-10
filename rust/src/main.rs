@@ -2,7 +2,6 @@ mod exec;
 mod serialize;
 mod metric;
 
-mod cop;
 mod local;
 mod common;
 mod os_statistics;
@@ -25,7 +24,5 @@ fn main() {
 
     if is_local {
         local::main()
-    } else {
-        cop::main()
     }
 }

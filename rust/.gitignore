@@ -1,1 +1,7 @@
 /target
+/latencies.out
+/Cargo.lock
+/ca-root
+/config
+/*.vim
+/log
