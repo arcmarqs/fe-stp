@@ -5,6 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
 use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
@@ -32,6 +33,8 @@ use atlas_core::state_transfer::divisible_state::*;
 use atlas_divisible_state::*;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_metrics::metrics::metric_duration;
+
+use self::message::CstMessage;
 
 pub mod message;
 
@@ -70,10 +73,10 @@ impl<S> Debug for ProtoPhase<S> {
 
 // NOTE: in this module, we may use cid interchangeably with
 // consensus sequence number
-pub struct BtStateTransfer<S, NT, PL>
+pub struct BttateTransfer<S, NT, PL>
     where S: DivisibleState + 'static {
     curr_seq: SeqNo,
-    root_digest: Digest,
+    cur_root_digest: Digest,
     largest_cid: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -83,6 +86,7 @@ pub struct BtStateTransfer<S, NT, PL>
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
+
     phase: ProtoPhase<S>,
 
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
@@ -90,6 +94,7 @@ pub struct BtStateTransfer<S, NT, PL>
     /// Persistent logging for the state transfer protocol.
     persistent_log: PL,
 }
+
 
 macro_rules! getmessage {
     ($progress:expr, $status:expr) => {
@@ -108,7 +113,7 @@ macro_rules! getmessage {
     }};
 }
 
-impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S, NT, PL>
+impl<S,OP, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S,OP, NT, PL>
     where S: DivisibleState + 'static,
           PL: DivisibleStateLog<S> + 'static
 {
@@ -118,7 +123,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S, NT, PL>
 type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> = <ST as StateTransferProtocol<S, NT, PL>>::Serialization;
 
 // TODO: request timeouts
-impl<S, NT, PL> BtStateTransfer<S, NT, PL>
+impl<S,OP, NT, PL> BtStateTransfer<S,OP, NT, PL>
     where
         S: DivisibleState + 'static,
         PL: DivisibleStateLog<S> + 'static,
@@ -126,13 +131,10 @@ impl<S, NT, PL> BtStateTransfer<S, NT, PL>
     /// Create a new instance of `CollabStateTransfer`.
     pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
         Self {
-            current_checkpoint_state: CheckpointState::None,
             base_timeout,
             curr_timeout: base_timeout,
             timeouts,
             node,
-            received_states: collections::hash_map(),
-            received_state_ids: collections::hash_map(),
             phase: ProtoPhase::Init,
             largest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
