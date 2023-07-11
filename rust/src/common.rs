@@ -6,6 +6,7 @@ use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atlas_divisible_state::state_orchestrator::StateOrchestrator;
 use intmap::IntMap;
 use konst::primitive::{parse_u128, parse_u32, parse_usize};
 use konst::unwrap_ctx;
@@ -41,10 +42,9 @@ use atlas_replica::config::{DivisibleStateReplicaConfig, ReplicaConfig};
 use atlas_replica::server::{Replica};
 use atlas_replica::server::divisible_state_server::{self, DivStReplica};
 
-use crate::exec::Microbenchmark;
-use crate::serialize::{MicrobenchmarkData, State, KvData};
+use crate::exec::KVApp;
+use crate::serialize::{KvData};
 use crate::stp::{self, BtStateTransfer, StateTransferConfig};
-use crate::stp::message::serialize::CSTMsg;
 
 #[macro_export]
 macro_rules! addr {
@@ -254,23 +254,23 @@ async fn node_config(
 }
 
 /// Set up the data handles so we initialize the networking layer
-pub type OrderProtocolMessage = PBFTConsensus<MicrobenchmarkData>;
-pub type StateTransferMessage = CSTMsg<State>;
-pub type LogTransferMessage = LTMsg<MicrobenchmarkData, OrderProtocolMessage, OrderProtocolMessage>;
+pub type OrderProtocolMessage = PBFTConsensus<KvData>;
+pub type StateTransferMessage = CSTMsg<StateOrchestrator>;
+pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have
-pub type ReplicaNetworking = MIOTcpNode<ServiceMsg<MicrobenchmarkData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>;
-pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<MicrobenchmarkData>>;
+pub type ReplicaNetworking = MIOTcpNode<ServiceMsg<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>;
+pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles
-pub type Logging = DivisibleStatePersistentLog<State, MicrobenchmarkData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
+pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
-pub type OrderProtocol = PBFTOrderProtocol<MicrobenchmarkData, StateTransferMessage, ReplicaNetworking>;
-pub type LogTransferProtocol = CollabLogTransfer<MicrobenchmarkData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type StateTransferProtocol = BtStateTransfer<State, ReplicaNetworking, Logging>;
+pub type OrderProtocol = PBFTOrderProtocol<KvData, StateTransferMessage, ReplicaNetworking>;
+pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
+pub type StateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = DivStReplica<State, Microbenchmark, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = DivStReplica<StateOrchestrator, KVApp, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
 
 pub async fn setup_client(
     n: usize,
@@ -336,9 +336,9 @@ pub async fn setup_replica(
         timeout_duration,
     };
 
-    let service = Microbenchmark::new(id);
+    let service = KVApp::default();
 
-    let conf = ReplicaConfig::<State, MicrobenchmarkData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
+    let conf = ReplicaConfig::<StateOrchestrator, KvData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
         node,
         view: SeqNo::ZERO,
         next_consensus_seq: SeqNo::ZERO,
