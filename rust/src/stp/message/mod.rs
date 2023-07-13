@@ -15,14 +15,14 @@ pub mod serialize;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct StMessage {
+pub struct StMessage<S> where S:DivisibleState {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,
-    kind: MessageKind,
+    kind: MessageKind<S>,
 }
 
-impl Debug for CstMessage {
+impl<S> Debug for StMessage<S> where S:DivisibleState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
             MessageKind::RequestLatestConsensusSeq => {
@@ -44,29 +44,29 @@ impl Debug for CstMessage {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum MessageKind{
+pub enum MessageKind<S> where S:DivisibleState {
     RequestLatestConsensusSeq,
     ReplyLatestConsensusSeq(Option<(SeqNo, Digest)>),
     RequestState,
-    ReplyState(RecoveryState<StateOrchestrator>),
+    ReplyState(RecoveryState<S>),
 }
 
-impl Orderable for CstMessage {
+impl<S> Orderable for StMessage<S> where S:DivisibleState {
     /// Returns the sequence number of this state transfer message.
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
-impl CstMessage {
+impl<S> StMessage<S> where S:DivisibleState {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, kind: MessageKind) -> Self {
+    pub fn new(seq: SeqNo, kind: MessageKind<S>) -> Self {
         Self { seq, kind }
     }
 
     /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &MessageKind {
+    pub fn kind(&self) -> &MessageKind<S>{
         &self.kind
     }
 

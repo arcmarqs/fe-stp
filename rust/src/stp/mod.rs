@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
+use atlas_divisible_state::state_orchestrator::StateOrchestrator;
 use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
@@ -34,44 +35,38 @@ use atlas_divisible_state::*;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_metrics::metrics::metric_duration;
 
-use self::message::CstMessage;
+use crate::stp::message::MessageKind;
+
+use self::message::StMessage;
 use self::message::serialize::STMsg;
 
 pub mod message;
 
+
+enum OrchestratorState<S> where S:DivisibleState {
+    // We haven't had a flush yet
+    None,
+    // the current state is outdated, requires syncing with either the Orchestrator 
+    // or with other replicas, the seqno here is the StateOrchestrator SeqNo
+    Old(SeqNo,Digest),
+    // The current state of the KVDb can be summarized by this descriptor
+    Current(S::StateDescriptor)
+}
 
 
 pub struct StateTransferConfig {
     pub timeout_duration: Duration
 }
 /// The state of the checkpoint
-pub enum CheckpointState<D> {
-    // no checkpoint has been performed yet
-    None,
-    // we are calling this a partial checkpoint because we are
-    // waiting for the application state from the execution layer
-    Partial {
-        // sequence number of the last executed request
-        seq: SeqNo,
-    },
-    PartialWithEarlier {
-        // sequence number of the last executed request
-        seq: SeqNo,
-        // save the earlier checkpoint, in case corruption takes place
-        earlier: Arc<ReadOnly<Checkpoint<D>>>,
-    },
-    // application state received, the checkpoint state is finalized
-    Complete(Arc<ReadOnly<Checkpoint<D>>>),
-}
 
-enum ProtoPhase<S> {
+enum ProtoPhase<S> where S: DivisibleState {
     Init,
-    WaitingCheckpoint(Vec<StoredMessage<CstMessage<S>>>),
+    WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
 
-impl<S> Debug for ProtoPhase<S> {
+impl<S> Debug for ProtoPhase<S> where S: DivisibleState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProtoPhase::Init => {
@@ -90,26 +85,40 @@ impl<S> Debug for ProtoPhase<S> {
     }
 }
 
-pub struct StFragment<S> {
-
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct ReqStateParts<S> where S:DivisibleState {
+    descriptors: Vec<S::PartDescription>,
 }
 
-pub struct RecoveryState<S,V,O> {
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct StFragment<S> where S: DivisibleState {
+    parts: Vec<S::StatePart>,
+}
+
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct RecoveryState<S> where S: DivisibleState{
     pub st_frag: Arc<ReadOnly<StFragment<S>>>,
 }
 
-enum STStatus {
+enum StStatus<S> where S:DivisibleState {
     Nil,
     Running,
     ReqLatestCid,
-    ReqStateUpdate
+    SeqNo(SeqNo),
+    ReqState,
+    State(RecoveryState<S>)
 }
 // NOTE: in this module, we may use cid interchangeably with
 // consensus sequence number
 pub struct BtStateTransfer<S, NT, PL>
     where S: DivisibleState + 'static {
     curr_seq: SeqNo,
-    StStatus: STStatus,
+    st_status: StStatus<S>,
+    curr_state: OrchestratorState<S>,
     largest_cid: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -128,20 +137,20 @@ pub struct BtStateTransfer<S, NT, PL>
 }
 
 
-pub enum CstProgress<S> {
+pub enum StProgress<S> where S: DivisibleState {
     // TODO: Timeout( some type here)
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
     /// the communication layer.
-    Message(Header, CstMessage<S>),
+    Message(Header, StMessage<S>),
 }
 
 macro_rules! getmessage {
     ($progress:expr, $status:expr) => {
         match $progress {
-            CstProgress::Nil => return $status,
-            CstProgress::Message(h, m) => (h, m),
+            StProgress::Nil => return $status,
+            SProgress::Message(h, m) => (h, m),
         }
     };
     // message queued while waiting for exec layer to deliver app state
@@ -149,7 +158,7 @@ macro_rules! getmessage {
         let phase = std::mem::replace($phase, ProtoPhase::Init);
         match phase {
             ProtoPhase::WaitingCheckpoint(h, m) => (h, m),
-            _ => return CstStatus::Nil,
+            _ => return StStatus::Nil,
         }
     }};
 }
@@ -170,7 +179,7 @@ where
         V: NetworkView,
     {
 
-        
+        todo!()
     }
 
     fn handle_off_ctx_message<D, OP, LP, V>(
@@ -185,20 +194,20 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        let (header, message) = message.into_inner();
+        let (header, inner_message) = message.into_inner();
 
-        let message = message.into_inner();
+        let st_message = inner_message.into_inner();
 
-        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), message, header.from(), message.sequence_number());
+        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), st_message, header.from(), st_message.sequence_number());
 
-        match &message.kind() {
-            CstMessageKind::RequestStateCid => {
-                self.process_request_seq(header, message);
+        match &inner_message.kind() {
+            MessageKind::RequestLatestConsensusSeq => {
+                self.process_request_seq(header, inner_message);
 
                 return Ok(());
             }
-            CstMessageKind::RequestState => {
-                self.process_request_state(header, message);
+            MessageKind::RequestState => {
+                self.process_request_state(header, inner_message);
 
                 return Ok(());
             }
@@ -207,12 +216,12 @@ where
 
         let status = self.process_message(
             view,
-            CstProgress::Message(header, message),
+            message,
         );
 
         match status {
-            CstStatus::Nil => (),
-// should not happen...
+            StStatus::Nil => (),
+            // should not happen...
             _ => {
                 return Err(format!("Invalid state reached while state transfer processing message! {:?}", status)).wrapped(ErrorKind::CoreServer);
             }
@@ -239,7 +248,12 @@ where
 
         debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(), message, header.from(), self.phase);
 
-        match &message.kind() {}
+        match message.kind() {
+            MessageKind::RequestLatestConsensusSeq => todo!(),
+            MessageKind::ReplyLatestConsensusSeq(_) => todo!(),
+            MessageKind::RequestState => todo!(),
+            MessageKind::ReplyState(_) => todo!(),
+        }
     }
 
     fn handle_app_state_requested<D, OP, LP, V>(
@@ -254,23 +268,16 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
+        let earlier = std::mem::replace(&mut self.curr_state, OrchestratorState::None);
 
-        self.current_checkpoint_state = match earlier {
-            CheckpointState::None => CheckpointState::Partial { seq },
-            CheckpointState::Complete(earlier) => {
-                CheckpointState::PartialWithEarlier { seq, earlier }
-            }
-            // FIXME: this may not be an invalid state after all; we may just be generating
-            // checkpoints too fast for the execution layer to keep up, delivering the
-            // hash digests of the appstate
-            _ => {
-                error!("Invalid checkpoint state detected");
-
-                self.current_checkpoint_state = earlier;
-
-                return Ok(ExecutionResult::Nil);
-            }
+        self.curr_state = match earlier {
+            OrchestratorState::None => OrchestratorState::Current(self.orchestrator.prepare_checkpoint()?),
+            OrchestratorState::Old(seq, digest) => {
+                if seq < self.orchestrator.get_seqno() {
+                    OrchestratorState::Current(self.orchestrator.prepare_checkpoint()?)
+                }
+            },
+            OrchestratorState::Current(c) => OrchestratorState::Current(c),
         };
 
         Ok(ExecutionResult::BeginCheckpoint)
@@ -309,7 +316,7 @@ impl<S,NT, PL> BtStateTransfer<S,NT,PL>
         PL: DivisibleStateLog<S> + 'static,
 {
     /// Create a new instance of `BtStateTransfer`.
-    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
+    pub fn new(orchestrator: Arc<S>, node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
         Self {
             base_timeout,
             curr_timeout: base_timeout,
@@ -321,7 +328,9 @@ impl<S,NT, PL> BtStateTransfer<S,NT,PL>
             curr_seq: SeqNo::ZERO,
             persistent_log,
             install_channel,
-            cur_root_digest: todo!(),
+            st_status: StStatus::Nil,
+            curr_state: OrchestratorState::None,
+            orchestrator,
         }
     }
 

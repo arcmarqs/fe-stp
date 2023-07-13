@@ -7,13 +7,13 @@ use atlas_execution::{serialize::ApplicationData, state::divisible_state::Divisi
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_divisible_state::state_orchestrator::StateOrchestrator;
 
-use super::CstMessage;
+use super::StMessage;
 
 pub struct STMsg<S: DivisibleState>(PhantomData<S>);
 
 impl<S: DivisibleState> StateTransferMessage for STMsg<S> {
 
-    type StateTransferMessage = CstMessage;
+    type StateTransferMessage = StMessage<S>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> atlas_common::error::Result<()> {
