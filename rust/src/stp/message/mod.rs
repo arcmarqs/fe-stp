@@ -45,9 +45,9 @@ impl<S> Debug for StMessage<S> where S:DivisibleState {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum MessageKind<S> where S:DivisibleState {
-    RequestLatestConsensusSeq,
-    ReplyLatestConsensusSeq(Option<(SeqNo, Digest)>),
-    RequestState,
+    RequestLatestSeq,
+    ReplyLatestSeq(Option<(SeqNo, Digest)>),
+    ReqState,
     ReplyState(RecoveryState<S>),
 }
 
