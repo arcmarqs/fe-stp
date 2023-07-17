@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
 use atlas_divisible_state::state_orchestrator::{StateOrchestrator, StateDescriptor};
-use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage};
+use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage, DivisibleStateDescriptor};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,6 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::Node;
 use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage};
 use atlas_execution::app::{Application, Reply, Request};
-use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
@@ -96,6 +95,10 @@ pub struct ReqStateParts<S> where S:DivisibleState {
 pub struct StFragment<S> where S: DivisibleState {
     parts: Vec<S::StatePart>,
 }
+struct ReceivedState<S> {
+    count: usize,
+    state: RecoveryState<S>,
+}
 
 struct ReceivedStateCid {
     cid: SeqNo,
@@ -105,6 +108,7 @@ struct ReceivedStateCid {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RecoveryState<S> where S: DivisibleState{
+    seq: SeqNo,
     pub st_frag: Arc<ReadOnly<StFragment<S>>>,
 }
 
@@ -130,10 +134,9 @@ pub struct BtStateTransfer<S, NT, PL>
     timeouts: Timeouts,
 
     node: Arc<NT>,
-    orchestrator: Arc<S>,
-
     phase: ProtoPhase<S>,
     received_state_ids: HashMap<Digest, ReceivedStateCid>,    
+    received_states: HashMap<Digest, ReceivedState<S>>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
     /// Persistent logging for the state transfer protocol.
@@ -182,8 +185,9 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
+        self.request_latest_consensus_seq_no::<D, OP, LP, V>(view);   
 
-        todo!()
+        Ok(())
     }
 
     fn handle_off_ctx_message<D, OP, LP, V>(
@@ -279,12 +283,27 @@ where
         let status = self.process_message_inner(view.clone(), StProgress::Message(header, message));
 
         match status {
-            StStatus::Nil => todo!(),
-            StStatus::Running => todo!(),
-            StStatus::ReqLatestCid => todo!(),
-            StStatus::SeqNo(_) => todo!(),
-            StStatus::ReqState => todo!(),
-            StStatus::State(_) => todo!(),
+            StStatus::Nil => (),
+            StStatus::Running => (),
+            StStatus::ReqLatestCid => self.request_latest_consensus_seq_no(view),
+            StStatus::SeqNo(seq) => {
+                if self.curr_state.into() < seq {
+                    debug!("{:?} // Requesting state {:?}", self.node.id(), seq);
+
+                    self.request_latest_state(view);
+                } else {
+                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+                    return Ok(STResult::StateTransferNotNeeded(seq));
+                }
+            },
+            StStatus::ReqState => self.request_latest_state(view),
+            StStatus::State(state) =>{
+                let start = Instant::now();
+
+                self.install_channel.send(InstallStateMessage::StatePart(state.st_frag.parts)).unwrap();
+
+                return Ok(STResult::StateTransferFinished(state.seq));
+            },
         }
 
         Ok(STResult::StateTransferRunning)
@@ -350,7 +369,7 @@ where
     PL: DivisibleStateLog<S> + 'static,
 {
     /// Create a new instance of `BtStateTransfer`.
-    pub fn new(orchestrator: Arc<S>, node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
+    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
         Self {
             base_timeout,
             curr_timeout: base_timeout,
@@ -364,8 +383,8 @@ where
             install_channel,
             st_status: StStatus::Nil,
             curr_state: OrchestratorState::None,
-            orchestrator,
             received_state_ids: HashMap::default(),
+            received_states: HashMap::default(),
         }
     }
 
@@ -380,7 +399,7 @@ where
     fn process_request_seq<D, OP, LP>(
         &mut self,
         header: Header,
-        message: STMessage<S>)
+        message: StMessage<S>)
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
@@ -398,9 +417,9 @@ where
             }
         };
 
-        let kind = MessageKind::ReplyStateCid(seq.clone());
+        let kind = MessageKind::ReplyLatestSeq(seq.clone());
 
-        let reply = STMessage::new(message.sequence_number(), kind);
+        let reply = StMessage::new(message.sequence_number(), kind);
 
         let network_msg = SystemMessage::from_state_transfer_message(reply);
 
@@ -446,7 +465,7 @@ where
                     _ => (),
                 }
 
-                CstStatus::Nil
+                StStatus::Nil
             }
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, StStatus::ReqLatestCid);
@@ -478,8 +497,8 @@ where
 
                         return StStatus::Running;
                     }
-                    MessageKind::ReplyLatestSeq(state_seq) => {
-                        if let Some((seq, digest)) = state_cid {
+                    MessageKind::ReplyLatestSeq(state_cid) => {
+                        if let Some((cid, digest)) = state_cid {
                             let received_state_cid = self
                                 .received_state_ids
                                 .entry(digest.clone())
@@ -507,7 +526,7 @@ where
 
                         return StStatus::Running;
                     },
-                    _ => return CstStatus::Running ,
+                    _ => return StStatus::Running ,
                 }
 
                 // check if we have gathered enough cid
@@ -654,14 +673,14 @@ where
 {
     type Config = StateTransferConfig;
 
-    fn initialize(config: Self::Config, timeouts: Timeouts, orchestrator: Arc<S>, node: Arc<NT>, log: PL,
+    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>, log: PL,
                   executor_state_handle: ChannelSyncTx<InstallStateMessage<S>>) -> Result<Self>
         where Self: Sized {
             let StateTransferConfig {
                 timeout_duration
             } = config;
     
-            Ok(Self::new(orchestrator, node, timeout_duration, timeouts, log, executor_handle))
+            Ok(Self::new(node, timeout_duration, timeouts, log, executor_state_handle))
     }
 
     fn handle_state_received_from_app<D, OP, LP>(&mut self,
@@ -672,13 +691,9 @@ where
               LP: LogTransferMessage + 'static,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
                
-
         if self.needs_checkpoint() {
             // This will make the state transfer protocol aware of the latest state
-            if let CstStatus::Nil = self.process_message(view, CstProgress::Nil) {} else {
-                return Err("Process message while needing checkpoint returned something else than nil")
-                    .wrapped(ErrorKind::Cst);
-            }
+            self.curr_state = OrchestratorState::Current(descriptor);
         }
 
         Ok(())
