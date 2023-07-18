@@ -44,6 +44,7 @@ use atlas_replica::server::divisible_state_server::{self, DivStReplica};
 
 use crate::exec::KVApp;
 use crate::serialize::{KvData};
+use crate::stp::message::serialize::STMsg;
 use crate::stp::{self, BtStateTransfer, StateTransferConfig};
 
 #[macro_export]
@@ -255,7 +256,7 @@ async fn node_config(
 
 /// Set up the data handles so we initialize the networking layer
 pub type OrderProtocolMessage = PBFTConsensus<KvData>;
-pub type StateTransferMessage = CSTMsg<StateOrchestrator>;
+pub type StateTransferMessage = STMsg<StateOrchestrator>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have

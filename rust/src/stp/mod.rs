@@ -95,7 +95,7 @@ pub struct ReqStateParts<S> where S:DivisibleState {
 pub struct StFragment<S> where S: DivisibleState {
     parts: Vec<S::StatePart>,
 }
-struct ReceivedState<S> {
+struct ReceivedState<S> where S: DivisibleState {
     count: usize,
     state: RecoveryState<S>,
 }
@@ -209,12 +209,12 @@ where
         debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), st_message, header.from(), st_message.sequence_number());
 
         match &inner_message.kind() {
-            MessageKind::RequestLatestConsensusSeq => {
+            MessageKind::RequestLatestSeq => {
                 self.process_request_seq(header, inner_message);
 
                 return Ok(());
             }
-            MessageKind::RequestState => {
+            MessageKind::ReqState => {
                 self.process_request_state(header, inner_message);
 
                 return Ok(());
@@ -225,7 +225,7 @@ where
         let status = self.process_message(
             view,
             message,
-        );
+        )?;
 
         match status {
             StStatus::Nil => (),
@@ -233,6 +233,7 @@ where
             _ => {
                 return Err(format!("Invalid state reached while state transfer processing message! {:?}", status)).wrapped(ErrorKind::CoreServer);
             }
+
         }
 
         Ok(())
@@ -263,12 +264,12 @@ where
         );
 
         match message.kind() {
-            MessageKind::RequestLatestConsensusSeq => {
+            MessageKind::RequestLatestSeq => {
                 self.process_request_seq(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
-            MessageKind::RequestState => {
+            MessageKind::ReqState => {
                 self.process_request_state(header, message);
 
                 return Ok(STResult::StateTransferRunning);
@@ -292,7 +293,7 @@ where
 
                     self.request_latest_state(view);
                 } else {
-                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_state.into(), seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             },
@@ -323,15 +324,7 @@ where
     {
         let earlier = std::mem::replace(&mut self.curr_state, OrchestratorState::None);
 
-        self.curr_state = match earlier {
-            OrchestratorState::None => OrchestratorState::Current(self.orchestrator.prepare_checkpoint()?),
-            OrchestratorState::Old(seq, digest) => {
-                if seq < self.orchestrator.get_seqno() {
-                    OrchestratorState::Current(self.orchestrator.prepare_checkpoint()?)
-                }
-            },
-            OrchestratorState::Current(c) => OrchestratorState::Current(c),
-        };
+       
 
         Ok(ExecutionResult::BeginCheckpoint)
     }
@@ -402,15 +395,14 @@ where
         message: StMessage<S>)
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
+              LP: LogTransferMessage + 'static
     {
         let seq = match &self.curr_state {
             OrchestratorState::Old (seq, earlier) => {
-                Some((earlier.sequence_number(), earlier.clone()))
+                Some((seq.clone(), earlier.clone()))
             }
             OrchestratorState::Current(state) => {
-                Some((state.sequence_number(),state.get_digest()))
+                Some((state.sequence_number(),state.get_digest().clone()))
             }
             _ => {
                 None
@@ -438,7 +430,6 @@ where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
         V: NetworkView,
     {
         match self.phase {
@@ -451,10 +442,10 @@ where
                 let (header, message) = getmessage!(progress, StStatus::Nil);
 
                 match message.kind() {
-                    MessageKind::RequestStateCid => {
+                    MessageKind::RequestLatestSeq=> {
                         self.process_request_seq(header, message);
                     }
-                    MessageKind::RequestState => {
+                    MessageKind::ReqState => {
                         self.process_request_state(header, message);
                     }
                     // we are not running cst, so drop any reply msgs
@@ -521,7 +512,7 @@ where
                             }
                         }
                     }
-                    MessageKind::RequestState => {
+                    MessageKind::ReqState => {
                         self.process_request_state(header, message);
 
                         return StStatus::Running;
@@ -629,7 +620,7 @@ where
                                 self.received_states.clear();
 
                                 debug!("{:?} // No matching states found, clearing", self.node.id());
-                                StStatus::RequestState
+                                StStatus::ReqState
                             } else {
                                 StStatus::Running
                             };
@@ -658,7 +649,7 @@ where
                     _ => {
                         debug!("{:?} // No states with more than f {} count", self.node.id(), f);
 
-                        StStatus::RequestState
+                        StStatus::ReqState
                     }
                 }
             },

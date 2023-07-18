@@ -72,9 +72,9 @@ impl<S> StMessage<S> where S:DivisibleState {
 
     /// Takes the recovery state embedded in this cst message, if it is available.
     pub fn take_state(&mut self) -> Option<AppStateMessage<StateOrchestrator>> {
-        let kind = std::mem::replace(&mut self.kind, MessageKind::RequestState);
+        let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState);
         match kind {
-            MessageKind::ReplyState(state) => Some(state),
+            MessageKind::ReplyState(state) => Some(),
             _ => {
                 self.kind = kind;
                 None
