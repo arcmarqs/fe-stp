@@ -6,7 +6,9 @@ use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atlas_divisible_state::SerializedState;
 use atlas_divisible_state::state_orchestrator::StateOrchestrator;
+use atlas_execution::state::divisible_state::StatePart;
 use intmap::IntMap;
 use konst::primitive::{parse_u128, parse_u32, parse_usize};
 use konst::unwrap_ctx;
@@ -256,7 +258,7 @@ async fn node_config(
 
 /// Set up the data handles so we initialize the networking layer
 pub type OrderProtocolMessage = PBFTConsensus<KvData>;
-pub type StateTransferMessage = STMsg<StateOrchestrator>;
+pub type StateTransferMessage = STMsg;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have

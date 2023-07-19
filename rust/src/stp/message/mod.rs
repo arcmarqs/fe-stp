@@ -15,23 +15,23 @@ pub mod serialize;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct StMessage<S> where S:DivisibleState {
+pub struct StMessage<S> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,
-    kind: MessageKind<S>,
+    kind: MessageKind<S> ,
 }
 
 impl<S> Debug for StMessage<S> where S:DivisibleState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            MessageKind::RequestLatestConsensusSeq => {
+            MessageKind::RequestLatestSeq => {
                 write!(f, "Request consensus ID")
             }
-            MessageKind::ReplyLatestConsensusSeq(opt ) => {
+            MessageKind::ReplyLatestSeq(opt ) => {
                 write!(f, "Reply consensus seq {:?}", opt.as_ref().map(|(seq, _)| *seq).unwrap_or(SeqNo::ZERO))
             }
-            MessageKind::RequestState => {
+            MessageKind::ReqState => {
                 write!(f, "Request state message")
             }
             MessageKind::ReplyState(_) => {
@@ -71,10 +71,10 @@ impl<S> StMessage<S> where S:DivisibleState {
     }
 
     /// Takes the recovery state embedded in this cst message, if it is available.
-    pub fn take_state(&mut self) -> Option<AppStateMessage<StateOrchestrator>> {
+    pub fn take_state(&mut self) -> Option<RecoveryState<S>> {
         let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState);
         match kind {
-            MessageKind::ReplyState(state) => Some(),
+            MessageKind::ReplyState(state) => Some(state),
             _ => {
                 self.kind = kind;
                 None
