@@ -169,7 +169,7 @@ macro_rules! getmessage {
 
 impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static,
+    S: DivisibleState + 'static + Send + Clone,
     PL: DivisibleStateLog<S> + 'static,
 {
     type Serialization = STMsg<S>;
@@ -835,7 +835,7 @@ where
 
 impl<S, NT, PL> DivisibleStateTransfer<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static,
+    S: DivisibleState + 'static + Send + Clone,
     PL: DivisibleStateLog<S> + 'static,
 {
     type Config = StateTransferConfig;

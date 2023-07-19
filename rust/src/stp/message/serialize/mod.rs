@@ -11,7 +11,7 @@ use super::StMessage;
 
 pub struct STMsg<S> (PhantomData<S>);
 
-impl<S: DivisibleState + Send> StateTransferMessage for STMsg<S> {
+impl<S: DivisibleState + Send + Clone> StateTransferMessage for STMsg<S> {
 
     type StateTransferMessage = StMessage<S>;
 
