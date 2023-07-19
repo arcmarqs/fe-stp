@@ -9,11 +9,11 @@ use atlas_divisible_state::{state_orchestrator::StateOrchestrator, SerializedSta
 
 use super::StMessage;
 
-pub struct STMsg (PhantomData<StateOrchestrator>);
+pub struct STMsg<S> (PhantomData<S>);
 
-impl StateTransferMessage for STMsg {
+impl<S: DivisibleState + Send> StateTransferMessage for STMsg<S> {
 
-    type StateTransferMessage = StMessage<StateOrchestrator>;
+    type StateTransferMessage = StMessage<S>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> atlas_common::error::Result<()> {

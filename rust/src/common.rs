@@ -258,7 +258,7 @@ async fn node_config(
 
 /// Set up the data handles so we initialize the networking layer
 pub type OrderProtocolMessage = PBFTConsensus<KvData>;
-pub type StateTransferMessage = STMsg;
+pub type StateTransferMessage = STMsg<SerializedState>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have

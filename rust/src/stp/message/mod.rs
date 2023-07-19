@@ -15,7 +15,7 @@ pub mod serialize;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct StMessage<S> {
+pub struct StMessage<S:DivisibleState> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,

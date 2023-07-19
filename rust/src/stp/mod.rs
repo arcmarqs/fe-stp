@@ -172,7 +172,7 @@ where
     S: DivisibleState + 'static,
     PL: DivisibleStateLog<S> + 'static,
 {
-    type Serialization = STMsg;
+    type Serialization = STMsg<S>;
 
     fn request_latest_state<D, OP, LP, V>(&mut self, view: V) -> Result<()>
     where
