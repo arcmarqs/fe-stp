@@ -45,9 +45,10 @@ pub mod message;
 pub struct StateTransferConfig {
     pub timeout_duration: Duration
 }
-// used to track the state part's position in the persistent checkpoint
 struct PersistentCheckpointTracker {
     path: String,
+    // used to track the state part's position in the persistent checkpoint
+    // K = pageId V= Length
     parts: HashMap<u64,u64>
 }
 enum ProtoPhase<S:DivisibleState> {
