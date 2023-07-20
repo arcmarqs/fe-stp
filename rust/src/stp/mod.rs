@@ -14,7 +14,7 @@ use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use atlas_common::channel::ChannelSyncTx;
 
-use atlas_common::collections;
+use atlas_common::collections::{self, OrderedMap};
 use atlas_common::collections::HashMap;
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
@@ -42,23 +42,14 @@ use self::message::serialize::STMsg;
 
 pub mod message;
 
-
-enum OrchestratorState<S> where S:DivisibleState {
-    // We haven't had a flush yet
-    None,
-    // the current state is outdated, requires syncing with either the Orchestrator 
-    // or with other replicas, the seqno here is the StateOrchestrator SeqNo
-    //Old(SeqNo,Digest),
-    // The current state of the KVDb can be summarized by this descriptor
-    Current(Arc<ReadOnly<S::StateDescriptor>>)
-}
-
-
 pub struct StateTransferConfig {
     pub timeout_duration: Duration
 }
-/// The state of the checkpoint
-
+// used to track the state part's position in the persistent checkpoint
+struct PersistentCheckpointTracker {
+    path: String,
+    parts: HashMap<u64,u64>
+}
 enum ProtoPhase<S:DivisibleState> {
     Init,
     WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
@@ -124,7 +115,7 @@ pub struct BtStateTransfer<S, NT, PL>
     where S: DivisibleState + 'static {
     curr_seq: SeqNo,
     st_status: StStatus<S>,
-    curr_state: OrchestratorState<S>,
+    checkpoint_state_descriptor: Option<S::StateDescriptor>,
     largest_cid: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -321,7 +312,7 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        let earlier = std::mem::replace(&mut self.curr_state, OrchestratorState::None);
+        let earlier = std::mem::replace(&mut self.curr_state, CheckpointState::None);
 
        
 
@@ -374,7 +365,9 @@ where
             persistent_log,
             install_channel,
             st_status: StStatus::Nil,
-            curr_state: OrchestratorState::None,
+            curr_checkpoint_state: CheckpointState::None,
+
+
             received_state_ids: HashMap::default(),
             received_states: HashMap::default(),
         }
@@ -455,7 +448,7 @@ where
               LP: LogTransferMessage + 'static,
     {
         let seq = match &self.curr_state {
-            OrchestratorState::Current(state) => {
+            CheckpointState::Current(state) => {
                 Some((state.sequence_number(),state.get_digest().clone()))
             }
             _ => {
@@ -533,7 +526,7 @@ where
         }
 
         let state = match &self.curr_state {
-            OrchestratorState::Current(state) => state.clone(),
+            CheckpointState::Current(state) => state.clone(),
             _ => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
                     waiting.push(StoredMessage::new(header, message));
@@ -861,7 +854,7 @@ where
                
         if self.needs_checkpoint() {
             // This will make the state transfer protocol aware of the latest state
-            self.curr_state = OrchestratorState::Current(Arc::new(ReadOnly::new(descriptor)));
+            self.curr_state = CheckpointState::Current(Arc::new(ReadOnly::new(descriptor)));
         }
 
         Ok(())
