@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
 use atlas_divisible_state::state_orchestrator::{StateOrchestrator, StateDescriptor};
+use atlas_divisible_state::state_tree::LeafNode;
 use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage, DivisibleStateDescriptor};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
@@ -58,14 +59,14 @@ pub struct StateTransferConfig {
 }
 /// The state of the checkpoint
 
-enum ProtoPhase<S> where S: DivisibleState {
+enum ProtoPhase<S:DivisibleState> {
     Init,
     WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
 
-impl<S> Debug for ProtoPhase<S> where S: DivisibleState {
+impl<S: DivisibleState> Debug for ProtoPhase<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProtoPhase::Init => {
@@ -86,13 +87,13 @@ impl<S> Debug for ProtoPhase<S> where S: DivisibleState {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ReqStateParts<S> where S:DivisibleState {
-    descriptors: Vec<S::PartDescription>,
+pub struct ReqStateParts{
+    descriptors: Vec<LeafNode>,
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-struct ReceivedState<S> where S: DivisibleState {
+struct ReceivedState<S: DivisibleState> {
     count: usize,
     state: RecoveryState<S>,
 }
@@ -104,12 +105,12 @@ struct ReceivedStateCid {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct RecoveryState<S> where S: DivisibleState{
+pub struct RecoveryState <S: DivisibleState> {
     seq: SeqNo,
     pub st_frag: Arc<ReadOnly<Vec<S::StatePart>>>,
 }
 
-enum StStatus<S> where S:DivisibleState {
+enum StStatus<S:DivisibleState> {
     Nil,
     Running,
     ReqLatestCid,
@@ -129,7 +130,7 @@ pub struct BtStateTransfer<S, NT, PL>
     base_timeout: Duration,
     curr_timeout: Duration,
     timeouts: Timeouts,
-
+    
     node: Arc<NT>,
     phase: ProtoPhase<S>,
     received_state_ids: HashMap<Digest, ReceivedStateCid>,    
@@ -141,7 +142,7 @@ pub struct BtStateTransfer<S, NT, PL>
 }
 
 
-pub enum StProgress<S> where S: DivisibleState {
+pub enum StProgress<S: DivisibleState> {
     // TODO: Timeout( some type here)
     /// This value represents null progress in the CST code's state machine.
     Nil,
@@ -549,7 +550,7 @@ where
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
                 seq: state.sequence_number(),
-                st_frag: Arc::new(ReadOnly::new(state.parts().clone())),
+                st_frag: Arc::new(ReadOnly::new(state.parts())),
             }),
         );
 

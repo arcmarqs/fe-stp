@@ -22,7 +22,7 @@ pub struct StMessage<S:DivisibleState> {
     kind: MessageKind<S> ,
 }
 
-impl<S> Debug for StMessage<S> where S:DivisibleState {
+impl<S: DivisibleState> Debug for StMessage<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
             MessageKind::RequestLatestSeq => {
@@ -44,21 +44,21 @@ impl<S> Debug for StMessage<S> where S:DivisibleState {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum MessageKind<S> where S:DivisibleState {
+pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
     ReplyLatestSeq(Option<(SeqNo, Digest)>),
     ReqState,
     ReplyState(RecoveryState<S>),
 }
 
-impl<S> Orderable for StMessage<S> where S:DivisibleState {
+impl<S>  Orderable for StMessage<S> where S: DivisibleState {
     /// Returns the sequence number of this state transfer message.
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
-impl<S> StMessage<S> where S:DivisibleState {
+impl<S> StMessage<S> where S: DivisibleState {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, kind: MessageKind<S>) -> Self {
@@ -66,7 +66,7 @@ impl<S> StMessage<S> where S:DivisibleState {
     }
 
     /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &MessageKind<S>{
+    pub fn kind(&self) -> &MessageKind<S> {
         &self.kind
     }
 
