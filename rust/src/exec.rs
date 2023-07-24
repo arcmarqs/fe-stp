@@ -28,20 +28,13 @@ fn initial_state() -> Result<StateOrchestrator> {
     Ok(state)
 }
 
-fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, KvData> {
+fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
         todo!()
     }
 
-fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, KvData> {
-    match request.as_ref() {
-        serialize::Action::Get(_) => todo!(),
-        serialize::Action::Set(_, _) => todo!(),
-        serialize::Action::Remove(_) => todo!(),
+fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
+        todo!()
     }
-    
-    self.1 += 1;
-    let reply = Arc::new();
 
-    reply
-}
+
 }

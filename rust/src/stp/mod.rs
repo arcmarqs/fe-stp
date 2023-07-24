@@ -2,13 +2,15 @@
 
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
+use std::fs::{File, OpenOptions};
+use std::io::{Write,Seek,SeekFrom};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
 use atlas_divisible_state::state_orchestrator::{StateOrchestrator, StateDescriptor};
 use atlas_divisible_state::state_tree::LeafNode;
-use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage, DivisibleStateDescriptor};
+use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage, DivisibleStateDescriptor, StatePart};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -33,7 +35,6 @@ use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResu
 use atlas_core::state_transfer::divisible_state::*;
 use atlas_divisible_state::*;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use atlas_metrics::metrics::metric_duration;
 
 use crate::stp::message::MessageKind;
 
@@ -45,12 +46,52 @@ pub mod message;
 pub struct StateTransferConfig {
     pub timeout_duration: Duration
 }
-struct PersistentCheckpointTracker {
+
+#[derive(Debug,Default)]
+struct PersistentCheckpoint<S: DivisibleState> {
+    descriptor: Option<S::StateDescriptor>,
     path: String,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
     parts: HashMap<u64,u64>
 }
+
+impl<S:DivisibleState> PersistentCheckpoint<S> {
+    pub fn new() -> Self {
+        Self {
+            descriptor: None,
+            path: String::from("./checkpoint/part_"),
+            parts: HashMap::default(),
+        }
+    }
+    pub fn get_digest(&self) -> Option<&Digest> {
+        match self.descriptor {
+            Some(descriptor) => Some(descriptor.get_digest()),
+            None => None,
+        }
+    }
+
+    pub fn get_seqno(&self) -> Option<SeqNo> {
+        match self.descriptor {
+            Some(descriptor) => Some(descriptor.sequence_number()),
+            None => None,
+        }
+    }
+
+    pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts:Vec<S::StatePart>) {
+        self.descriptor = Some(descriptor);
+
+        for part in new_parts {
+            let part_path = format!("{}{}",self.path,part.id().to_string());
+            if let Ok(f) = OpenOptions::new().read(true).write(true).create(true).open(part_path) {
+                f.seek(SeekFrom::Start(0)).unwrap();
+                f.write_all(part.bytes()).unwrap();
+            }
+           
+        }
+    }
+}
+
 enum ProtoPhase<S:DivisibleState> {
     Init,
     WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
@@ -116,7 +157,7 @@ pub struct BtStateTransfer<S, NT, PL>
     where S: DivisibleState + 'static {
     curr_seq: SeqNo,
     st_status: StStatus<S>,
-    checkpoint_state_descriptor: Option<S::StateDescriptor>,
+    checkpoint: PersistentCheckpoint<S>,
     largest_cid: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -200,12 +241,12 @@ where
 
         match &inner_message.kind() {
             MessageKind::RequestLatestSeq => {
-                self.process_request_seq(header, st_message);
+                self.process_request_seq::<D,OP,LP>(header, st_message);
 
                 return Ok(());
             }
             MessageKind::ReqState => {
-                self.process_request_state(header, st_message);
+                self.process_request_state::<D,OP,LP>(header, st_message);
 
                 return Ok(());
             }
@@ -256,12 +297,12 @@ where
 
         match message.kind() {
             MessageKind::RequestLatestSeq => {
-                self.process_request_seq(header, message);
+                self.process_request_seq::<D,OP,LP>(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
             MessageKind::ReqState => {
-                self.process_request_state(header, message);
+                self.process_request_state::<D,OP,LP>(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
@@ -272,19 +313,19 @@ where
         self.timeouts
             .received_cst_request(header.from(), message.sequence_number());
 
-        let status = self.process_message_inner(view.clone(), StProgress::Message(header, message));
+        let status = self.process_message_inner::<D,OP,LP,V>(view.clone(), StProgress::Message(header, message));
 
         match status {
             StStatus::Nil => (),
             StStatus::Running => (),
-            StStatus::ReqLatestCid => self.request_latest_consensus_seq_no(view),
+            StStatus::ReqLatestCid => self.request_latest_consensus_seq_no::<D,OP,LP,V>(view),
             StStatus::SeqNo(seq) => {
-                if self.curr_state.into() < seq {
+                if self.checkpoint.get_seqno() < Some(seq) {
                     debug!("{:?} // Requesting state {:?}", self.node.id(), seq);
 
                     self.request_latest_state(view);
                 } else {
-                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_state.into(), seq);
+                    //debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_state.into(), seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             },
@@ -313,7 +354,7 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        let earlier = std::mem::replace(&mut self.curr_state, CheckpointState::None);
+        
 
        
 
@@ -334,7 +375,7 @@ where
     {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
-                if self.cst_request_timed_out(cst_seq.clone(), view.clone()) {
+                if self.cst_request_timed_out::<D,OP,LP,V>(cst_seq.clone(), view.clone()) {
                     return Ok(STTimeoutResult::RunCst);
                 }
             }
@@ -366,7 +407,7 @@ where
             persistent_log,
             install_channel,
             st_status: StStatus::Nil,
-            curr_checkpoint_state: CheckpointState::None,
+            checkpoint: PersistentCheckpoint::new(),
 
 
             received_state_ids: HashMap::default(),
@@ -448,13 +489,12 @@ where
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
     {
-        let seq = match &self.curr_state {
-            CheckpointState::Current(state) => {
-                Some((state.sequence_number(),state.get_digest().clone()))
+        let seq = match &self.checkpoint.descriptor {
+            Some(descriptor) => { 
+                Some((descriptor.sequence_number(),descriptor.get_digest()))
             }
-            _ => {
-                None
-            }
+            ,
+            None => {None},
         };
 
         let kind = MessageKind::ReplyLatestSeq(seq.clone());
@@ -527,7 +567,7 @@ where
         }
 
         let state = match &self.curr_state {
-            CheckpointState::Current(state) => state.clone(),
+            Some(state) => state.clone(),
             _ => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
                     waiting.push(StoredMessage::new(header, message));
@@ -696,9 +736,9 @@ where
                     None => return StStatus::Running,
                 };
 
-                let state_digest = state.into_state().0.get_digest();
+                let state_digest = state.st_frag;
 
-                debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
+               // debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
                 state_digest, self.received_states.contains_key(&state_digest));
 
                 if self.received_states.contains_key(&state_digest) {
@@ -751,7 +791,7 @@ where
                             return if i >= view.quorum() {
                                 self.received_states.clear();
 
-                                debug!("{:?} // No matching states found, clearing", self.node.id());
+                               // debug!("{:?} // No matching states found, clearing", self.node.id());
                                 StStatus::ReqState
                             } else {
                                 StStatus::Running
@@ -779,7 +819,7 @@ where
                         StStatus::State(state)
                     }
                     _ => {
-                        debug!("{:?} // No states with more than f {} count", self.node.id(), f);
+                        //debug!("{:?} // No states with more than f {} count", self.node.id(), f);
 
                         StStatus::ReqState
                     }
@@ -803,7 +843,7 @@ where
  
          let cst_seq = self.curr_seq;
  
-         info!("{:?} // Requesting latest state seq no with seq {:?}", self.node.id(), cst_seq);
+         //info!("{:?} // Requesting latest state seq no with seq {:?}", self.node.id(), cst_seq);
  
          self.timeouts.timeout_cst_request(self.curr_timeout,
                                            view.quorum() as u32,
@@ -853,9 +893,8 @@ where
               LP: LogTransferMessage + 'static,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
                
-        if self.needs_checkpoint() {
-            // This will make the state transfer protocol aware of the latest state
-            self.curr_state = CheckpointState::Current(Arc::new(ReadOnly::new(descriptor)));
+        if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest()) {
+            self.checkpoint.update(descriptor, state);
         }
 
         Ok(())
