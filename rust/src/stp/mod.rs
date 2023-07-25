@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
-use std::io::{Write,Seek,SeekFrom};
+use std::io::{Write,Seek,SeekFrom, prelude::*};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -47,13 +47,14 @@ pub struct StateTransferConfig {
     pub timeout_duration: Duration
 }
 
+type PartRef = (File,u64);
 #[derive(Debug,Default)]
 struct PersistentCheckpoint<S: DivisibleState> {
     descriptor: Option<S::StateDescriptor>,
     path: String,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
-    parts: HashMap<u64,u64>
+    parts: HashMap<u64,PartRef>
 }
 
 impl<S:DivisibleState> PersistentCheckpoint<S> {
@@ -80,15 +81,34 @@ impl<S:DivisibleState> PersistentCheckpoint<S> {
 
     pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts:Vec<S::StatePart>) {
         self.descriptor = Some(descriptor);
+        let mut buf = Vec::new();
+        let mut part_path = String::new();
 
         for part in new_parts {
-            let part_path = format!("{}{}",self.path,part.id().to_string());
+            part_path = format!("{}{}",self.path,part.id().to_string());
             if let Ok(f) = OpenOptions::new().read(true).write(true).create(true).open(part_path) {
                 f.seek(SeekFrom::Start(0)).unwrap();
-                f.write_all(part.bytes()).unwrap();
+                buf = bincode::serialize(&part).unwrap();
+                f.write_all(buf.as_slice()).unwrap();
+                self.parts.insert(part.id(), (f,buf.len() as u64));
             }
            
         }
+    }
+
+    pub fn get_parts(&self, part_ids: Vec<u64>) -> Result<Vec<S::StatePart>> {
+        let mut ret = Vec::new();
+        let mut buf = Vec::new();
+        for part_id in part_ids.iter() {
+            let (mut file,len) = self.parts.get(part_id).unwrap();
+            assert_eq!(len.clone(),file.read_to_end(&mut buf)? as u64);
+            let part = bincode::deserialize::<S::StatePart>(buf.as_slice()).wrapped(ErrorKind::CommunicationSerialize)?;
+            ret.push(part);
+        }
+
+
+        Ok(ret)
+
     }
 }
 
@@ -116,12 +136,6 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
             }
         }
     }
-}
-
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct ReqStateParts{
-    descriptors: Vec<LeafNode>,
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -245,7 +259,7 @@ where
 
                 return Ok(());
             }
-            MessageKind::ReqState => {
+            MessageKind::ReqState(pids) => {
                 self.process_request_state::<D,OP,LP>(header, st_message);
 
                 return Ok(());
@@ -301,7 +315,7 @@ where
 
                 return Ok(STResult::StateTransferRunning);
             }
-            MessageKind::ReqState => {
+            MessageKind::ReqState(_) => {
                 self.process_request_state::<D,OP,LP>(header, message);
 
                 return Ok(STResult::StateTransferRunning);
@@ -356,8 +370,7 @@ where
     {
         
 
-       
-
+    
         Ok(ExecutionResult::BeginCheckpoint)
     }
 
@@ -442,7 +455,7 @@ where
                 true
             }
             StStatus::ReqState => {
-                self.request_latest_state(view);
+                self.request_latest_state::<D,OP,LP,V>(view);
 
                 true
             }
@@ -491,7 +504,7 @@ where
     {
         let seq = match &self.checkpoint.descriptor {
             Some(descriptor) => { 
-                Some((descriptor.sequence_number(),descriptor.get_digest()))
+                Some((descriptor.sequence_number(),descriptor.get_digest().clone()))
             }
             ,
             None => {None},
@@ -503,8 +516,8 @@ where
 
         let network_msg = SystemMessage::from_state_transfer_message(reply);
 
-        debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
-            header.from(), message.sequence_number(), seq);
+      //  debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
+      //      header.from(), message.sequence_number(), seq);
 
         self.node.send(network_msg, header.from(), true);
     }
@@ -565,9 +578,9 @@ where
                 return;
             }
         }
-
-        let state = match &self.curr_state {
-            Some(state) => state.clone(),
+  
+        let state = match &self.checkpoint.descriptor {
+            Some(state) => state,
             _ => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
                     waiting.push(StoredMessage::new(header, message));
@@ -580,11 +593,20 @@ where
             }
         };
 
+        match message.kind() {
+            MessageKind::ReqState(req_parts) =>{
+                let st_frag = state
+            },
+            _ => {
+                return;
+            }
+        }
+
         let reply = StMessage::new(
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
                 seq: state.sequence_number(),
-                st_frag: Arc::new(ReadOnly::new(state.parts())),
+                st_frag: Arc::new(ReadOnly::new(state.parts().clone())),
             }),
         );
 
@@ -633,17 +655,17 @@ where
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, StStatus::ReqLatestCid);
 
-                debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
-                   i, header.from(), message.sequence_number(), self.curr_seq);
+               // debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
+               //    i, header.from(), message.sequence_number(), self.curr_seq);
 
                 // drop cst messages with invalid seq no
                 if message.sequence_number() != self.curr_seq {
-                    debug!(
-                        "{:?} // Wait what? {:?} {:?}",
-                        self.node.id(),
-                        self.curr_seq,
-                        message.sequence_number()
-                    );
+                  //  debug!(
+                  //      "{:?} // Wait what? {:?} {:?}",
+                  //      self.node.id(),
+                  //      self.curr_seq,
+                  //      message.sequence_number()
+                  //  );
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
                     // value of `queryID` different from the current
@@ -671,14 +693,14 @@ where
                                 });
 
                             if *cid > received_state_cid.cid {
-                                info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
-                                    self.node.id(), received_state_cid.cid, *cid, digest);
+                             //   info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
+                            //        self.node.id(), received_state_cid.cid, *cid, digest);
 
                                 received_state_cid.cid = *cid;
                                 received_state_cid.count = 1;
                             } else if *cid == received_state_cid.cid {
-                                info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
-                                self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
+                             //   info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
+                             //   self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
 
                                 received_state_cid.count += 1;
                             }
@@ -698,9 +720,9 @@ where
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
-                        self.node.id(), view.quorum(), i,
-                        self.curr_seq, self.largest_cid, self.latest_cid_count);
+               // debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+               //         self.node.id(), view.quorum(), i,
+               //         self.curr_seq, self.largest_cid, self.latest_cid_count);
 
                 if i == view.quorum() {
                     self.phase = ProtoPhase::Init;
@@ -708,9 +730,9 @@ where
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
-                    info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
-                            self.node.id(),
-                            self.largest_cid, self.latest_cid_count);
+                  //  info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
+                  //          self.node.id(),
+                  //          self.largest_cid, self.latest_cid_count);
 
                     // we don't need the latest cid to be available in at least
                     // f+1 replicas since the replica has the proof that the system
@@ -739,7 +761,7 @@ where
                 let state_digest = state.st_frag;
 
                // debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
-                state_digest, self.received_states.contains_key(&state_digest));
+               // state_digest, self.received_states.contains_key(&state_digest));
 
                 if self.received_states.contains_key(&state_digest) {
                     let current_state = self.received_states.get_mut(&state_digest).unwrap();

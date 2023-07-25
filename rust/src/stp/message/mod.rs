@@ -31,7 +31,7 @@ impl<S: DivisibleState> Debug for StMessage<S> {
             MessageKind::ReplyLatestSeq(opt ) => {
                 write!(f, "Reply consensus seq {:?}", opt.as_ref().map(|(seq, _)| *seq).unwrap_or(SeqNo::ZERO))
             }
-            MessageKind::ReqState => {
+            MessageKind::ReqState(_) => {
                 write!(f, "Request state message")
             }
             MessageKind::ReplyState(_) => {
@@ -47,7 +47,7 @@ impl<S: DivisibleState> Debug for StMessage<S> {
 pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
     ReplyLatestSeq(Option<(SeqNo, Digest)>),
-    ReqState,
+    ReqState(Vec<u64>),
     ReplyState(RecoveryState<S>),
 }
 
@@ -71,8 +71,8 @@ impl<S> StMessage<S> where S: DivisibleState {
     }
 
     /// Takes the recovery state embedded in this cst message, if it is available.
-    pub fn take_state(&mut self) -> Option<RecoveryState<S>> {
-        let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState);
+    pub fn take_state(&mut self, pids: Vec<u64>) -> Option<RecoveryState<S>> {
+        let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState(pids));
         match kind {
             MessageKind::ReplyState(state) => Some(state),
             _ => {
