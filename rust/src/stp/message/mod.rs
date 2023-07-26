@@ -71,7 +71,7 @@ impl<S> StMessage<S> where S: DivisibleState {
     }
 
     /// Takes the recovery state embedded in this cst message, if it is available.
-    pub fn take_state(&mut self, pids: Vec<u64>) -> Option<RecoveryState<S>> {
+    pub fn take_state(&mut self) -> Option<RecoveryState<S>> {
         let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState(pids));
         match kind {
             MessageKind::ReplyState(state) => Some(state),

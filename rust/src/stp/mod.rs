@@ -180,8 +180,8 @@ pub struct BtStateTransfer<S, NT, PL>
     
     node: Arc<NT>,
     phase: ProtoPhase<S>,
-    received_state_ids: HashMap<Digest, ReceivedStateCid>,    
-    received_states: HashMap<Digest, ReceivedState<S>>,
+    received_state_descriptors: HashMap<Digest, ReceivedState<S>>,
+    received_state_parts: Vec<(Digest, ReceivedState<S>)>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
     /// Persistent logging for the state transfer protocol.
@@ -230,7 +230,26 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        self.request_latest_consensus_seq_no::<D, OP, LP, V>(view);   
+        self.received_state_parts.clear();
+
+        self.next_seq();
+
+        let cst_seq = self.curr_seq();
+
+        //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
+
+        self.timeouts.timeout_cst_request(self.curr_timeout,
+                                          view.quorum() as u32,
+                                          cst_seq);
+
+        self.phase = ProtoPhase::ReceivingState(0);
+
+        //TODO: Maybe attempt to use followers to rebuild state and avoid
+        // Overloading the replicas
+        let message = StMessage::new(cst_seq, MessageKind::ReqState);
+        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
+
+        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
 
         Ok(())
     }
@@ -271,16 +290,6 @@ where
             view,
             message,
         )?;
-
-        match status {
-            STResult::RunStateTransfer => todo!(),
-            STResult::StateTransferNotNeeded(_) => todo!(),
-            STResult::StateTransferRunning => todo!(),
-            STResult::StateTransferReady => todo!(),
-            STResult::StateTransferFinished(_) => todo!(),
-           
-            // should not happen...
-        }
 
         Ok(())
     }
@@ -455,7 +464,7 @@ where
                 true
             }
             StStatus::ReqState => {
-                self.request_latest_state::<D,OP,LP,V>(view);
+                self.request_latest_state(view);
 
                 true
             }
@@ -593,14 +602,15 @@ where
             }
         };
 
-        match message.kind() {
+       let st_frag =  match message.kind() {
             MessageKind::ReqState(req_parts) =>{
-                let st_frag = state
+                self.checkpoint.get_parts(req_parts.clone()).unwrap()
+
             },
             _ => {
                 return;
             }
-        }
+        };
 
         let reply = StMessage::new(
             message.sequence_number(),
@@ -639,7 +649,7 @@ where
                     MessageKind::RequestLatestSeq=> {
                         self.process_request_seq(header, message);
                     }
-                    MessageKind::ReqState => {
+                    MessageKind::ReqState(_) => {
                         self.process_request_state(header, message);
                     }
                     // we are not running cst, so drop any reply msgs
@@ -706,7 +716,7 @@ where
                             }
                         }
                     }
-                    MessageKind::ReqState => {
+                    MessageKind::ReqState(_) => {
                         self.process_request_state(header, message);
 
                         return StStatus::Running;
@@ -745,7 +755,7 @@ where
                 }
             }
             ProtoPhase::ReceivingState(i) => {
-                let (header, mut message) = getmessage!(progress, StStatus::ReqState);
+                let (header, mut message) = getmessage!(progress, StStatus::ReqState());
 
                 if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
@@ -814,7 +824,7 @@ where
                                 self.received_states.clear();
 
                                // debug!("{:?} // No matching states found, clearing", self.node.id());
-                                StStatus::ReqState
+                                StStatus::ReqState()
                             } else {
                                 StStatus::Running
                             };
