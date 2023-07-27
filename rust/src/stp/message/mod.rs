@@ -37,6 +37,12 @@ impl<S: DivisibleState> Debug for StMessage<S> {
             MessageKind::ReplyState(_) => {
                 write!(f, "Reply with state message")
             }
+            MessageKind::RequestStateDescriptor =>{
+                write!(f, "Request State Descriptor")
+            },
+            MessageKind::ReplyStateDescriptor(_) => {
+                write!(f, "Reply state descriptor")
+            },
         }
 
     }
@@ -47,7 +53,9 @@ impl<S: DivisibleState> Debug for StMessage<S> {
 pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
     ReplyLatestSeq(Option<(SeqNo, Digest)>),
-    ReqState(Vec<u64>),
+    RequestStateDescriptor,
+    ReplyStateDescriptor(Option<S::StateDescriptor>),
+    ReqState(Vec<S::PartDescription>),
     ReplyState(RecoveryState<S>),
 }
 
@@ -72,13 +80,24 @@ impl<S> StMessage<S> where S: DivisibleState {
 
     /// Takes the recovery state embedded in this cst message, if it is available.
     pub fn take_state(&mut self) -> Option<RecoveryState<S>> {
-        let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState(pids));
+        let kind = std::mem::replace(&mut self.kind, MessageKind::ReqState(vec![]));
         match kind {
             MessageKind::ReplyState(state) => Some(state),
             _ => {
                 self.kind = kind;
                 None
             }
+        }
+    }
+
+    pub fn take_descriptor(&mut self) -> Option<S::StateDescriptor> {
+        let kind = std::mem::replace(&mut self.kind, MessageKind::RequestStateDescriptor);
+        match kind {
+            MessageKind::ReplyStateDescriptor(descriptor) => descriptor,
+            _ => {
+                self.kind = kind;
+                None
+            },
         }
     }
 }

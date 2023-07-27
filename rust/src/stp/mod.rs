@@ -1,68 +1,81 @@
 #![feature(inherent_associated_types)]
 
 use std::cmp::Ordering;
-use std::fmt::{Debug, Formatter};
+use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter, write};
 use std::fs::{File, OpenOptions};
-use std::io::{Write,Seek,SeekFrom, prelude::*};
+use std::io::{prelude::*, Seek, SeekFrom, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use atlas_common::channel::ChannelSyncTx;
 use atlas_core::state_transfer::log_transfer::StatefulOrderProtocol;
-use atlas_divisible_state::state_orchestrator::{StateOrchestrator, StateDescriptor};
+use atlas_divisible_state::state_orchestrator::{StateDescriptor, StateOrchestrator};
 use atlas_divisible_state::state_tree::LeafNode;
-use atlas_execution::state::divisible_state::{DivisibleState, AppStateMessage, InstallStateMessage, DivisibleStateDescriptor, StatePart};
+use atlas_execution::state::divisible_state::{
+    AppStateMessage, DivisibleState, DivisibleStateDescriptor, InstallStateMessage, StatePart, PartDescription,
+};
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use atlas_common::channel::ChannelSyncTx;
 
-use atlas_common::collections::{self, OrderedMap};
 use atlas_common::collections::HashMap;
+use atlas_common::collections::{self, HashSet, OrderedMap};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage, NetworkMessage};
 use atlas_communication::Node;
-use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage};
-use atlas_execution::app::{Application, Reply, Request};
-use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
-use atlas_core::persistent_log::{DivisibleStateLog, PersistableStateTransferProtocol, OperationMode};
-use atlas_core::serialize::{LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
-use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult, divisible_state};
+use atlas_core::persistent_log::{
+    DivisibleStateLog, OperationMode, PersistableStateTransferProtocol,
+};
+use atlas_core::serialize::{
+    LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StateTransferMessage,
+    StatefulOrderProtocolMessage,
+};
 use atlas_core::state_transfer::divisible_state::*;
-use atlas_divisible_state::*;
+use atlas_core::state_transfer::{
+    divisible_state, Checkpoint, CstM, STResult, STTimeoutResult, StateTransferProtocol,
+};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
+use atlas_divisible_state::*;
+use atlas_execution::app::{Application, Reply, Request};
+use atlas_execution::serialize::ApplicationData;
 
 use crate::stp::message::MessageKind;
 
-use self::message::StMessage;
 use self::message::serialize::STMsg;
+use self::message::StMessage;
 
 pub mod message;
 
 pub struct StateTransferConfig {
-    pub timeout_duration: Duration
+    pub timeout_duration: Duration,
 }
 
-type PartRef = (File,u64);
-#[derive(Debug,Default)]
+type PartRef = (File, u64);
+#[derive(Debug, Default)]
 struct PersistentCheckpoint<S: DivisibleState> {
     descriptor: Option<S::StateDescriptor>,
     path: String,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
-    parts: HashMap<u64,PartRef>
+    parts: HashMap<u64, PartRef>,
+    // list of parts we need in orget to recover the state
+    req_parts: Vec<S::PartDescription>,
 }
 
-impl<S:DivisibleState> PersistentCheckpoint<S> {
+impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn new() -> Self {
         Self {
             descriptor: None,
-            path: String::from("./checkpoint/part_"),
+            path: String::from("./checkpoint/page"),
             parts: HashMap::default(),
+            req_parts: Vec::default(),
         }
     }
     pub fn get_digest(&self) -> Option<&Digest> {
@@ -79,43 +92,63 @@ impl<S:DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts:Vec<S::StatePart>) {
+    fn distribute_req_parts(
+        &mut self,
+        targets: impl Iterator<Item = NodeId>,
+        num_targets: usize,
+    ) -> HashMap<NodeId,Vec<S::PartDescription>> {
+        let mut ret = HashMap::default();
+
+        self.req_parts
+            .chunks(num_targets)
+            .zip(targets)
+            .map(|(chunk, id)| ret.insert(id, chunk.to_vec()));
+
+        ret
+    }
+
+    pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts: Vec<S::StatePart>) {
         self.descriptor = Some(descriptor);
         let mut buf = Vec::new();
         let mut part_path = String::new();
 
         for part in new_parts {
-            part_path = format!("{}{}",self.path,part.id().to_string());
-            if let Ok(f) = OpenOptions::new().read(true).write(true).create(true).open(part_path) {
+            part_path = format!("{}{}", self.path, part.id().to_string());
+            if let Ok(f) = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(part_path)
+            {
                 f.seek(SeekFrom::Start(0)).unwrap();
                 buf = bincode::serialize(&part).unwrap();
                 f.write_all(buf.as_slice()).unwrap();
-                self.parts.insert(part.id(), (f,buf.len() as u64));
+                self.parts.insert(part.id(), (f, buf.len() as u64));
             }
-           
         }
+        
     }
 
-    pub fn get_parts(&self, part_ids: Vec<u64>) -> Result<Vec<S::StatePart>> {
+    pub fn get_parts(&self, parts_desc: &Vec<S::PartDescription>) -> Result<Vec<S::StatePart>> {
         let mut ret = Vec::new();
         let mut buf = Vec::new();
-        for part_id in part_ids.iter() {
-            let (mut file,len) = self.parts.get(part_id).unwrap();
-            assert_eq!(len.clone(),file.read_to_end(&mut buf)? as u64);
-            let part = bincode::deserialize::<S::StatePart>(buf.as_slice()).wrapped(ErrorKind::CommunicationSerialize)?;
+        for part_desc in parts_desc.iter() {
+            let (mut file, len) = self.parts.get(part_desc.id()).unwrap();
+            assert_eq!(len.clone(), file.read_to_end(&mut buf)? as u64);
+            let part = bincode::deserialize::<S::StatePart>(buf.as_slice())
+                .wrapped(ErrorKind::CommunicationSerialize)?;
             ret.push(part);
         }
 
-
         Ok(ret)
-
     }
 }
 
-enum ProtoPhase<S:DivisibleState> {
+enum ProtoPhase<S: DivisibleState> {
     Init,
     WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
     ReceivingCid(usize),
+    ReceivingStateDescriptor,
     ReceivingState(usize),
 }
 
@@ -131,18 +164,14 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
             ProtoPhase::ReceivingCid(size) => {
                 write!(f, "Receiving CID phase {} responses", size)
             }
+            ProtoPhase::ReceivingStateDescriptor => {
+                write!(f, "Receiving state descriptor")
+            }
             ProtoPhase::ReceivingState(size) => {
-                write!(f, "Receiving state phase {} responses", size)
+                write!(f, "Receiving state phase responses")
             }
         }
     }
-}
-
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-struct ReceivedState<S: DivisibleState> {
-    count: usize,
-    state: RecoveryState<S>,
 }
 
 struct ReceivedStateCid {
@@ -152,23 +181,58 @@ struct ReceivedStateCid {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct RecoveryState <S: DivisibleState> {
+pub struct RecoveryState<S: DivisibleState> {
     seq: SeqNo,
     pub st_frag: Arc<ReadOnly<Vec<S::StatePart>>>,
 }
 
-enum StStatus<S:DivisibleState> {
+
+enum StStatus<S: DivisibleState> {
     Nil,
     Running,
     ReqLatestCid,
     SeqNo(SeqNo),
+    RequestStateDescriptor,
+    StateDescriptor(S::StateDescriptor),
     ReqState,
-    State(RecoveryState<S>)
+    State(RecoveryState<S>),
+    PartiallyComplete(RecoveryState<S>),
 }
+
+impl<S:DivisibleState> Debug for StStatus<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StStatus::Nil => {
+                write!(f, "Nil")
+            }
+            StStatus::Running => {
+                write!(f, "Running")
+            }
+            StStatus::ReqLatestCid => {
+                write!(f, "Request latest CID")
+            }
+           StStatus::ReqState => {
+                write!(f, "Request latest state")
+            }
+            StStatus::SeqNo(seq) => {
+                write!(f, "Received seq no {:?}", seq)
+            }
+           StStatus::State(_) => {
+                write!(f, "Received state")
+            }
+            StStatus::RequestStateDescriptor => write!(f, "Request State Descriptor"),
+            StStatus::StateDescriptor(_) => write!(f, "Received State Descriptor"),
+            StStatus::PartiallyComplete(_) => write!(f, "Some Parts Installed, Requesting Remaining parts"),
+        }
+    }
+}
+
 // NOTE: in this module, we may use cid interchangeably with
 // consensus sequence number
 pub struct BtStateTransfer<S, NT, PL>
-    where S: DivisibleState + 'static {
+where
+    S: DivisibleState + 'static,
+{
     curr_seq: SeqNo,
     st_status: StStatus<S>,
     checkpoint: PersistentCheckpoint<S>,
@@ -177,17 +241,16 @@ pub struct BtStateTransfer<S, NT, PL>
     base_timeout: Duration,
     curr_timeout: Duration,
     timeouts: Timeouts,
-    
+
     node: Arc<NT>,
     phase: ProtoPhase<S>,
-    received_state_descriptors: HashMap<Digest, ReceivedState<S>>,
-    received_state_parts: Vec<(Digest, ReceivedState<S>)>,
+    received_state_ids: HashMap<Digest, ReceivedStateCid>,
+    accepted_state_parts: Vec<S::StatePart>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
     /// Persistent logging for the state transfer protocol.
     persistent_log: PL,
 }
-
 
 pub enum StProgress<S: DivisibleState> {
     // TODO: Timeout( some type here)
@@ -230,26 +293,7 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        self.received_state_parts.clear();
-
-        self.next_seq();
-
-        let cst_seq = self.curr_seq();
-
-        //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
-
-        self.timeouts.timeout_cst_request(self.curr_timeout,
-                                          view.quorum() as u32,
-                                          cst_seq);
-
-        self.phase = ProtoPhase::ReceivingState(0);
-
-        //TODO: Maybe attempt to use followers to rebuild state and avoid
-        // Overloading the replicas
-        let message = StMessage::new(cst_seq, MessageKind::ReqState);
-        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
-
-        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
+        self.request_latest_consensus_seq_no::<D, OP, LP, V>(view);
 
         Ok(())
     }
@@ -270,27 +314,37 @@ where
 
         let st_message = inner_message.into_inner();
 
-        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), st_message, header.from(), st_message.sequence_number());
+        debug!(
+            "{:?} // Off context Message {:?} from {:?} with seq {:?}",
+            self.node.id(),
+            st_message,
+            header.from(),
+            st_message.sequence_number()
+        );
 
         match &inner_message.kind() {
             MessageKind::RequestLatestSeq => {
-                self.process_request_seq::<D,OP,LP>(header, st_message);
+                self.process_request_seq::<D, OP, LP>(header, st_message);
 
                 return Ok(());
             }
+            MessageKind::RequestStateDescriptor => {
+                self.process_request_descriptor::<D, OP, LP>(header, st_message);
+            }
             MessageKind::ReqState(pids) => {
-                self.process_request_state::<D,OP,LP>(header, st_message);
+                self.process_request_state::<D, OP, LP>(header, st_message);
 
                 return Ok(());
             }
             _ => {}
         }
 
-        let status = self.process_message(
-            view,
-            message,
-        )?;
+        let status = self.process_message_inner(view, StProgress::Message(header,st_message));
 
+        match status {
+            StStatus::Nil => (),
+           _ => return Err(format!("Invalid state reached while state transfer processing message! {:?}", status)).wrapped(ErrorKind::CoreServer)
+        }
         Ok(())
     }
 
@@ -303,7 +357,7 @@ where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         V: NetworkView,
     {
         let (header, message) = message.into_inner();
@@ -320,12 +374,17 @@ where
 
         match message.kind() {
             MessageKind::RequestLatestSeq => {
-                self.process_request_seq::<D,OP,LP>(header, message);
+                self.process_request_seq::<D, OP, LP>(header, message);
+
+                return Ok(STResult::StateTransferRunning);
+            }
+            MessageKind::RequestStateDescriptor => {
+                self.process_request_descriptor::<D, OP, LP>(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
             MessageKind::ReqState(_) => {
-                self.process_request_state::<D,OP,LP>(header, message);
+                self.process_request_state::<D, OP, LP>(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
@@ -336,29 +395,59 @@ where
         self.timeouts
             .received_cst_request(header.from(), message.sequence_number());
 
-        let status = self.process_message_inner::<D,OP,LP,V>(view.clone(), StProgress::Message(header, message));
+        let status = self.process_message_inner::<D, OP, LP, V>(
+            view.clone(),
+            StProgress::Message(header, message),
+        );
 
         match status {
             StStatus::Nil => (),
             StStatus::Running => (),
-            StStatus::ReqLatestCid => self.request_latest_consensus_seq_no::<D,OP,LP,V>(view),
+            StStatus::ReqLatestCid => self.request_latest_consensus_seq_no::<D, OP, LP, V>(view),
             StStatus::SeqNo(seq) => {
                 if self.checkpoint.get_seqno() < Some(seq) {
                     debug!("{:?} // Requesting state {:?}", self.node.id(), seq);
 
-                    self.request_latest_state(view);
+                    self.request_state_descriptor(view);
                 } else {
                     //debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_state.into(), seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
-            },
+            }
             StStatus::ReqState => self.request_latest_state(view)?,
-            StStatus::State(state) =>{
+            StStatus::State(state) => {
                 let start = Instant::now();
 
-                self.install_channel.send(InstallStateMessage::StatePart(state.st_frag.to_vec())).unwrap();
+                self.install_channel
+                    .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
+                    .unwrap();
 
                 return Ok(STResult::StateTransferFinished(state.seq));
+            }
+            StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
+            StStatus::StateDescriptor(descriptor) => {
+                if Some(descriptor) != self.checkpoint.descriptor {
+                    
+                    self.checkpoint.req_parts = match &self.checkpoint.descriptor {
+                        Some(descriptor) => descriptor.compare_descriptors(descriptor),
+                        None => descriptor.parts().clone(),
+                    };
+
+                    self.request_latest_state(view)?;
+                } else {
+                    return Ok(STResult::StateTransferNotNeeded(descriptor.sequence_number()));
+                }
+
+
+            }
+            StStatus::PartiallyComplete(state) => {
+                let start = Instant::now();
+
+                self.install_channel
+                    .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
+                    .unwrap();
+
+                self.request_latest_state(view)?;
             },
         }
 
@@ -377,9 +466,6 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        
-
-    
         Ok(ExecutionResult::BeginCheckpoint)
     }
 
@@ -397,7 +483,7 @@ where
     {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
-                if self.cst_request_timed_out::<D,OP,LP,V>(cst_seq.clone(), view.clone()) {
+                if self.cst_request_timed_out::<D, OP, LP, V>(cst_seq.clone(), view.clone()) {
                     return Ok(STTimeoutResult::RunCst);
                 }
             }
@@ -407,7 +493,8 @@ where
     }
 }
 
-type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> = <ST as StateTransferProtocol<S, NT, PL>>::Serialization;
+type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> =
+    <ST as StateTransferProtocol<S, NT, PL>>::Serialization;
 
 // TODO: request timeouts
 impl<S, NT, PL> BtStateTransfer<S, NT, PL>
@@ -416,7 +503,13 @@ where
     PL: DivisibleStateLog<S> + 'static,
 {
     /// Create a new instance of `BtStateTransfer`.
-    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
+    pub fn new(
+        node: Arc<NT>,
+        base_timeout: Duration,
+        timeouts: Timeouts,
+        persistent_log: PL,
+        install_channel: ChannelSyncTx<InstallStateMessage<S>>,
+    ) -> Self {
         Self {
             base_timeout,
             curr_timeout: base_timeout,
@@ -431,9 +524,8 @@ where
             st_status: StStatus::Nil,
             checkpoint: PersistentCheckpoint::new(),
 
-
             received_state_ids: HashMap::default(),
-            received_states: HashMap::default(),
+            accepted_state_parts: Vec::new(),
         }
     }
 
@@ -453,13 +545,14 @@ where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
         LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         V: NetworkView,
     {
         let status = self.timed_out(seq);
 
         match status {
             StStatus::ReqLatestCid => {
-                self.request_latest_consensus_seq_no(view);
+                self.request_latest_consensus_seq_no::<D,OP,LP,V>(view);
 
                 true
             }
@@ -503,40 +596,68 @@ where
         }
     }
 
-    fn process_request_seq<D, OP, LP>(
-        &mut self,
-        header: Header,
-        message: StMessage<S>)
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
+    fn process_request_seq<D, OP, LP>(&mut self, header: Header, message: StMessage<S>)
+    where
+        D: ApplicationData + 'static,
+        OP: OrderingProtocolMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
+        LP: LogTransferMessage + 'static,
     {
         let seq = match &self.checkpoint.descriptor {
-            Some(descriptor) => { 
-                Some((descriptor.sequence_number(),descriptor.get_digest().clone()))
-            }
-            ,
-            None => {None},
+            Some(descriptor) => Some((
+                descriptor.sequence_number(),
+                descriptor.get_digest().clone(),
+            )),
+            None => None,
         };
 
         let kind = MessageKind::ReplyLatestSeq(seq.clone());
 
         let reply = StMessage::new(message.sequence_number(), kind);
 
-        let network_msg = SystemMessage::from_state_transfer_message(reply);
+        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
 
-      //  debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
-      //      header.from(), message.sequence_number(), seq);
+        //  debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
+        //      header.from(), message.sequence_number(), seq);
 
         self.node.send(network_msg, header.from(), true);
     }
 
+    pub fn request_state_descriptor<D, OP, LP, V>(&mut self, view: V)
+    where
+        D: ApplicationData + 'static,
+        OP: OrderingProtocolMessage + 'static,
+        LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
+        V: NetworkView,
+    {   
+       
+       self.next_seq();
+
+       let cst_seq = self.curr_seq;
+
+       //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
+
+       self.timeouts.timeout_cst_request(self.curr_timeout,
+                                         1,
+                                         cst_seq);
+
+       self.phase = ProtoPhase::ReceivingStateDescriptor;
+
+       //TODO: Maybe attempt to use followers to rebuild state and avoid
+       // Overloading the replicas
+       let message = StMessage::new(cst_seq, MessageKind::RequestStateDescriptor);
+       let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
+
+       self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
+    }
     /// Process the entire list of pending state transfer requests
     /// This will only reply to the latest request sent by each of the replicas
     fn process_pending_state_requests<D, OP, LP>(&mut self)
     where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         LP: LogTransferMessage + 'static,
     {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
@@ -563,7 +684,7 @@ where
             map.into_values().for_each(|req| {
                 let (header, message) = req.into_inner();
 
-                self.process_request_state::<D, OP, LP>(header, message);
+                self.process_request_state(header, message);
             });
         }
     }
@@ -572,8 +693,8 @@ where
     where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         LP: LogTransferMessage + 'static,
-        
     {
         match &mut self.phase {
             ProtoPhase::Init => {}
@@ -587,7 +708,7 @@ where
                 return;
             }
         }
-  
+
         let state = match &self.checkpoint.descriptor {
             Some(state) => state,
             _ => {
@@ -602,11 +723,10 @@ where
             }
         };
 
-       let st_frag =  match message.kind() {
-            MessageKind::ReqState(req_parts) =>{
-                self.checkpoint.get_parts(req_parts.clone()).unwrap()
-
-            },
+        let st_frag = match message.kind() {
+            MessageKind::ReqState(req_parts) => {
+                self.checkpoint.get_parts(req_parts).unwrap()
+            }
             _ => {
                 return;
             }
@@ -616,11 +736,55 @@ where
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
                 seq: state.sequence_number(),
-                st_frag: Arc::new(ReadOnly::new(state.parts().clone())),
+                st_frag: Arc::new(ReadOnly::new(st_frag)),
             }),
         );
 
-        let network_msg = SystemMessage::from_state_transfer_message(reply);
+        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
+
+        self.node.send(network_msg, header.from(), true).unwrap();
+    }
+
+    pub fn process_request_descriptor<D, OP, LP>(&self, header: Header, message: StMessage<S>)
+    where
+        D: ApplicationData + 'static,
+        OP: OrderingProtocolMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
+        LP: LogTransferMessage + 'static,
+    {
+        match &mut self.phase {
+            ProtoPhase::Init => {}
+            ProtoPhase::WaitingCheckpoint(waiting) => {
+                waiting.push(StoredMessage::new(header, message));
+
+                return;
+            }
+            _ => {
+                // We can't reply to state requests when requesting state ourselves
+                return;
+            }
+        }
+
+        let state = match &self.checkpoint.descriptor {
+            Some(state) => state,
+            _ => {
+                if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
+                    waiting.push(StoredMessage::new(header, message));
+                } else {
+                    self.phase =
+                        ProtoPhase::WaitingCheckpoint(vec![StoredMessage::new(header, message)]);
+                }
+
+                return;
+            }
+        };
+
+        let reply = StMessage::new(
+            message.sequence_number(),
+            MessageKind::ReplyStateDescriptor(Some(state.clone())),
+        );
+
+        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
 
         self.node.send(network_msg, header.from(), true).unwrap();
     }
@@ -634,6 +798,7 @@ where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
         LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         V: NetworkView,
     {
         match self.phase {
@@ -646,8 +811,11 @@ where
                 let (header, message) = getmessage!(progress, StStatus::Nil);
 
                 match message.kind() {
-                    MessageKind::RequestLatestSeq=> {
+                    MessageKind::RequestLatestSeq => {
                         self.process_request_seq(header, message);
+                    }
+                    MessageKind::RequestStateDescriptor => {
+                        self.process_request_descriptor(header, message)
                     }
                     MessageKind::ReqState(_) => {
                         self.process_request_state(header, message);
@@ -665,17 +833,17 @@ where
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, StStatus::ReqLatestCid);
 
-               // debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
-               //    i, header.from(), message.sequence_number(), self.curr_seq);
+                // debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
+                //    i, header.from(), message.sequence_number(), self.curr_seq);
 
                 // drop cst messages with invalid seq no
                 if message.sequence_number() != self.curr_seq {
-                  //  debug!(
-                  //      "{:?} // Wait what? {:?} {:?}",
-                  //      self.node.id(),
-                  //      self.curr_seq,
-                  //      message.sequence_number()
-                  //  );
+                    //  debug!(
+                    //      "{:?} // Wait what? {:?} {:?}",
+                    //      self.node.id(),
+                    //      self.curr_seq,
+                    //      message.sequence_number()
+                    //  );
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
                     // value of `queryID` different from the current
@@ -703,14 +871,14 @@ where
                                 });
 
                             if *cid > received_state_cid.cid {
-                             //   info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
-                            //        self.node.id(), received_state_cid.cid, *cid, digest);
+                                //   info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
+                                //        self.node.id(), received_state_cid.cid, *cid, digest);
 
                                 received_state_cid.cid = *cid;
                                 received_state_cid.count = 1;
                             } else if *cid == received_state_cid.cid {
-                             //   info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
-                             //   self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
+                                //   info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
+                                //   self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
 
                                 received_state_cid.count += 1;
                             }
@@ -720,8 +888,8 @@ where
                         self.process_request_state(header, message);
 
                         return StStatus::Running;
-                    },
-                    _ => return StStatus::Running ,
+                    }
+                    _ => return StStatus::Running,
                 }
 
                 // check if we have gathered enough cid
@@ -730,9 +898,9 @@ where
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-               // debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
-               //         self.node.id(), view.quorum(), i,
-               //         self.curr_seq, self.largest_cid, self.latest_cid_count);
+                // debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+                //         self.node.id(), view.quorum(), i,
+                //         self.curr_seq, self.largest_cid, self.latest_cid_count);
 
                 if i == view.quorum() {
                     self.phase = ProtoPhase::Init;
@@ -740,9 +908,9 @@ where
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
-                  //  info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
-                  //          self.node.id(),
-                  //          self.largest_cid, self.latest_cid_count);
+                    //  info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
+                    //          self.node.id(),
+                    //          self.largest_cid, self.latest_cid_count);
 
                     // we don't need the latest cid to be available in at least
                     // f+1 replicas since the replica has the proof that the system
@@ -755,7 +923,7 @@ where
                 }
             }
             ProtoPhase::ReceivingState(i) => {
-                let (header, mut message) = getmessage!(progress, StStatus::ReqState());
+                let (header, mut message) = getmessage!(progress, StStatus::ReqState);
 
                 if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
@@ -767,95 +935,51 @@ where
                     // drop invalid message kinds
                     None => return StStatus::Running,
                 };
-
-                let state_digest = state.st_frag;
-
-               // debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
-               // state_digest, self.received_states.contains_key(&state_digest));
-
-                if self.received_states.contains_key(&state_digest) {
-                    let current_state = self.received_states.get_mut(&state_digest).unwrap();
-
-                    let current_state_seq: SeqNo = current_state.state.seq.clone();
-                    let recv_state_seq: SeqNo = state.sequence_number();
-
-                    match recv_state_seq.cmp(&current_state_seq) {
-                        Ordering::Less | Ordering::Equal => {
-                            // we have just verified that the state is the same, but the decision log is
-                            // smaller than the one we have already received
-                            current_state.count += 1;
-                        }
-                        Ordering::Greater => {
-                            current_state.state = state;
-                            // We have also verified that the state is the same but the decision log is
-                            // Larger, so we want to store the newest one. However we still want to increment the count
-                            // We can do this since to be in the decision log, a replica must have all of the messages
-                            // From at least 2f+1 replicas, so we know that the log is valid
-                            current_state.count += 1;
-                        }
+                
+                let mut accepted_descriptor = Vec::new();
+                for received_part in **state.st_frag {
+                    if self.checkpoint.req_parts.contains(received_part.descriptor()) {
+                        accepted_descriptor.push(received_part.descriptor().clone());
+                        self.accepted_state_parts.push(received_part);
                     }
-                } else {
-                    self.received_states.insert(state_digest.clone(), ReceivedState { count: 1, state });
                 }
 
-                // check if we have gathered enough state
-                // replies from peer nodes
-                //
-                // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                if i <= view.f() {
+
+                if !self.checkpoint.req_parts.is_empty() {
+                    //remove the parts that we accepted
+                    self.checkpoint.req_parts.retain(|part| !accepted_descriptor.contains(part));
                     self.phase = ProtoPhase::ReceivingState(i);
                     return StStatus::Running;
                 }
 
-                // NOTE: clear saved states when we return;
-                // this is important, because each state
-                // may be several GBs in size
-
-                // check if we have at least f+1 matching states
-                let digest = {
-                    let received_state = self.received_states.iter().max_by_key(|(_, st)| st.count);
-
-                    match received_state {
-                        Some((digest, _)) => digest.clone(),
-                        None => {
-                            return if i >= view.quorum() {
-                                self.received_states.clear();
-
-                               // debug!("{:?} // No matching states found, clearing", self.node.id());
-                                StStatus::ReqState()
-                            } else {
-                                StStatus::Running
-                            };
-                        }
-                    }
-                };
-
-                let received_state = {
-                    let received_state = self.received_states.remove(&digest);
-                    self.received_states.clear();
-                    received_state
-                };
-
                 // reset timeout, since req was successful
                 self.curr_timeout = self.base_timeout;
 
-                // return the state
-                let f = view.f();
+                let st_frag = self.accepted_state_parts.drain(0..).collect();
+                let st: RecoveryState<S> = RecoveryState {
+                    seq: state.seq,
+                    st_frag: Arc::new(ReadOnly::new(st_frag)),
+                };
+                
 
-                match received_state {
-                    Some(ReceivedState { count, state }) if count > f => {
-                        self.phase = ProtoPhase::Init;
-
-                        StStatus::State(state)
-                    }
-                    _ => {
-                        //debug!("{:?} // No states with more than f {} count", self.node.id(), f);
-
-                        StStatus::ReqState
-                    }
+                if self.checkpoint.req_parts.is_empty() {
+                    self.phase = ProtoPhase::Init;
+                    StStatus::State(st)
+                } else {
+                    StStatus::PartiallyComplete(st)
                 }
+            },
+            ProtoPhase::ReceivingStateDescriptor => {
+                let (header, mut message) = getmessage!(progress, StStatus::RequestStateDescriptor);
+
+                let descriptor = match message.take_descriptor() {
+                    Some(descriptor) => descriptor,
+                    None => return StStatus::Running,
+                };
+
+                return StStatus::StateDescriptor(descriptor)
             },
         }
     }
@@ -865,33 +989,66 @@ where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
         LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
         V: NetworkView,
     {
-         // reset state of latest seq no. request
-         self.largest_cid = SeqNo::ZERO;
-         self.latest_cid_count = 0;
- 
-         self.next_seq();
- 
-         let cst_seq = self.curr_seq;
- 
-         //info!("{:?} // Requesting latest state seq no with seq {:?}", self.node.id(), cst_seq);
- 
-         self.timeouts.timeout_cst_request(self.curr_timeout,
-                                           view.quorum() as u32,
-                                           cst_seq);
- 
-         self.phase = ProtoPhase::ReceivingCid(0);
- 
-         let message = StMessage::new(
-             cst_seq,
-             MessageKind::RequestLatestSeq,
-         );
- 
-         let targets = view;
- 
-         self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
+        // reset state of latest seq no. request
+        self.largest_cid = SeqNo::ZERO;
+        self.latest_cid_count = 0;
+
+        self.next_seq();
+
+        let cst_seq = self.curr_seq;
+
+        //info!("{:?} // Requesting latest state seq no with seq {:?}", self.node.id(), cst_seq);
+
+        self.timeouts
+            .timeout_cst_request(self.curr_timeout, view.quorum() as u32, cst_seq);
+
+        self.phase = ProtoPhase::ReceivingCid(0);
+
+        let message = StMessage::new(cst_seq, MessageKind::RequestLatestSeq);
+
+        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
+
+        self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
     }
+
+    fn request_latest_state<D, OP, LP, V>(&mut self, view: V) -> Result<()>
+    where
+        D: ApplicationData + 'static,
+        OP: OrderingProtocolMessage + 'static,
+        LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, <BtStateTransfer<S, NT, PL> as StateTransferProtocol<S,NT,PL>>::Serialization, LP>>,
+        V: NetworkView,
+    {
+    
+        //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
+
+        self.next_seq();
+
+        let cst_seq = self.curr_seq;
+
+        self.timeouts
+            .timeout_cst_request(self.curr_timeout, view.quorum() as u32, cst_seq);
+
+        self.phase = ProtoPhase::ReceivingState(0);
+
+        //TODO: Maybe attempt to use followers to rebuild state and avoid
+        // Overloading the replicas
+        let mut message;
+        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
+        let parts_map = self.checkpoint.distribute_req_parts(targets, view.n()-1);
+
+        for target in targets {
+            message = StMessage::new(cst_seq, MessageKind::ReqState(parts_map.get(&target).unwrap().clone()));
+
+            self.node.send(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)),target,true);
+        }
+
+        Ok(())
+    }
+
 
     fn next_seq(&mut self) -> SeqNo {
         self.curr_seq = self.curr_seq.next();
@@ -907,25 +1064,40 @@ where
 {
     type Config = StateTransferConfig;
 
-    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>, log: PL,
-                  executor_state_handle: ChannelSyncTx<InstallStateMessage<S>>) -> Result<Self>
-        where Self: Sized {
-            let StateTransferConfig {
-                timeout_duration
-            } = config;
-    
-            Ok(Self::new(node, timeout_duration, timeouts, log, executor_state_handle))
+    fn initialize(
+        config: Self::Config,
+        timeouts: Timeouts,
+        node: Arc<NT>,
+        log: PL,
+        executor_state_handle: ChannelSyncTx<InstallStateMessage<S>>,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        let StateTransferConfig { timeout_duration } = config;
+
+        Ok(Self::new(
+            node,
+            timeout_duration,
+            timeouts,
+            log,
+            executor_state_handle,
+        ))
     }
 
-    fn handle_state_received_from_app<D, OP, LP>(&mut self,
-                                                 descriptor: <S as DivisibleState>::StateDescriptor,
-                                                 state: Vec<<S as DivisibleState>::StatePart>) -> Result<()>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
-               
-        if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest()) {
+    fn handle_state_received_from_app<D, OP, LP>(
+        &mut self,
+        descriptor: <S as DivisibleState>::StateDescriptor,
+        state: Vec<<S as DivisibleState>::StatePart>,
+    ) -> Result<()>
+    where
+        D: ApplicationData + 'static,
+        OP: OrderingProtocolMessage + 'static,
+        LP: LogTransferMessage + 'static,
+        NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+    {
+        if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest())
+        {
             self.checkpoint.update(descriptor, state);
         }
 
