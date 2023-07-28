@@ -16,7 +16,6 @@ use atlas_execution::state::divisible_state::{
     AppStateMessage, DivisibleState, DivisibleStateDescriptor, InstallStateMessage, StatePart, PartDescription,
 };
 use log::{debug, error, info};
-#[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use atlas_common::collections::HashMap;
@@ -179,8 +178,7 @@ struct ReceivedStateCid {
     count: usize,
 }
 
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryState<S: DivisibleState> {
     seq: SeqNo,
     pub st_frag: Arc<ReadOnly<Vec<S::StatePart>>>,
@@ -280,7 +278,7 @@ macro_rules! getmessage {
 
 impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static + Send + Clone,
+    S: DivisibleState + 'static + Send + Clone + Serialize + for<'a> Deserialize<'a>,
     PL: DivisibleStateLog<S> + 'static,
 {
     type Serialization = STMsg<S>;
@@ -499,7 +497,7 @@ type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> =
 // TODO: request timeouts
 impl<S, NT, PL> BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static,
+    S: DivisibleState + 'static + Serialize + for<'a> Deserialize<'a>,
     PL: DivisibleStateLog<S> + 'static,
 {
     /// Create a new instance of `BtStateTransfer`.

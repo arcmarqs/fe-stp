@@ -6,12 +6,13 @@ use std::time::Instant;
 use atlas_execution::{serialize::ApplicationData, state::divisible_state::{DivisibleState, StatePart}};
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_divisible_state::{state_orchestrator::StateOrchestrator, SerializedState};
+use serde::{Serialize, Deserialize};
 
 use super::StMessage;
 
 pub struct STMsg<S> (PhantomData<S>);
 
-impl<S: DivisibleState> StateTransferMessage for STMsg<S> {
+impl<S: DivisibleState + Serialize + for<'a> Deserialize<'a>> StateTransferMessage for STMsg<S> {
 
     type StateTransferMessage = StMessage<S>;
 
@@ -25,3 +26,4 @@ impl<S: DivisibleState> StateTransferMessage for STMsg<S> {
         todo!()
     }
 }
+

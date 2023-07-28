@@ -30,7 +30,7 @@ procinfo = "0.4.2"
 
 atlas-common = { path = "../../Atlas/atlas-common" }
 atlas-communication = { path = "../../Atlas/atlas-communication" }
-atlas-execution = { path = "../../Atlas/atlas-execution" }
+atlas-execution = { path = "../../Atlas/atlas-execution", features = ["serialize_serde"] }
 atlas-core = { path = "../../Atlas/atlas-core" }
 atlas-divisible-state = { path = "../../Atlas/atlas-divisible-state"}
 atlas-replica = { path = "../../Atlas/atlas-replica" }

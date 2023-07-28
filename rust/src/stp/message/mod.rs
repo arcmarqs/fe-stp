@@ -2,7 +2,6 @@ use std::fmt::{Debug, Formatter};
 
 use atlas_divisible_state::state_orchestrator::StateOrchestrator;
 use atlas_execution::state::divisible_state::{AppStateMessage, DivisibleState};
-#[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use atlas_common::{ordering::{Orderable, SeqNo}, crypto::hash::Digest};
@@ -13,8 +12,7 @@ use super::RecoveryState;
 
 pub mod serialize;
 
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone,Serialize, Deserialize)]
 pub struct StMessage<S:DivisibleState> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
@@ -48,8 +46,7 @@ impl<S: DivisibleState> Debug for StMessage<S> {
     }
 }
 
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone,Serialize, Deserialize)]
 pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
     ReplyLatestSeq(Option<(SeqNo, Digest)>),
