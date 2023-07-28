@@ -13,6 +13,8 @@ use crate::serialize;
 
 use crate::serialize::KvData;
 
+
+#[derive(Default)]
 pub struct KVApp;
 
 impl Application<StateOrchestrator> for KVApp {

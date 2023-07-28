@@ -964,8 +964,11 @@ where
                 };
                 
 
+                self.accepted_state_parts.clear();
+
                 if self.checkpoint.req_parts.is_empty() {
                     self.phase = ProtoPhase::Init;
+
                     StStatus::State(st)
                 } else {
                     StStatus::PartiallyComplete(st)
@@ -1025,6 +1028,8 @@ where
     
         //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
 
+        self.accepted_state_parts.clear();
+
         self.next_seq();
 
         let cst_seq = self.curr_seq;
@@ -1048,7 +1053,6 @@ where
 
         Ok(())
     }
-
 
     fn next_seq(&mut self) -> SeqNo {
         self.curr_seq = self.curr_seq.next();
