@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
 use atlas_divisible_state::state_orchestrator::{StateOrchestrator, self};
@@ -35,7 +36,47 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
     }
 
 fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
-        todo!()
+       let ivec =  match *request {
+            serialize::Action::Get(k) => state.db.get(k),
+            serialize::Action::Set(k, v) => state.db.insert(k, v),
+            serialize::Action::Remove(k) => state.db.remove(k),
+        }.unwrap();
+
+        let reply_inner = ivec.map(|x| String::from_utf8(x.to_vec()).unwrap());
+
+        Arc::new(reply_inner)
+    }
+
+fn unordered_batched_execution(
+        &self,
+        state: &StateOrchestrator,
+        requests: atlas_execution::app::UnorderedBatch<Request<Self, StateOrchestrator>>,
+    ) -> BatchReplies<Reply<Self, StateOrchestrator>> {
+        let mut reply_batch = BatchReplies::with_capacity(requests.len());
+
+        for unordered_req in requests.into_inner() {
+            let (peer_id, sess, opid, req) = unordered_req.into_inner();
+            let reply = self.unordered_execution(&state, req);
+            reply_batch.add(peer_id, sess, opid, reply);
+        }
+
+        reply_batch
+    }
+
+fn update_batch(
+        &mut self,
+        state: &mut StateOrchestrator,
+        batch: UpdateBatch<Request<Self, StateOrchestrator>>,
+    ) -> BatchReplies<Reply<Self, StateOrchestrator>> {
+        let mut reply_batch = BatchReplies::with_capacity(batch.len());
+
+        for update in batch.into_inner() {
+            let (peer_id, sess, opid, req) = update.into_inner();
+            let reply = self.update(state, req);
+            reply_batch.add(peer_id, sess, opid, reply);
+        }
+
+        reply_batch
     }
 
 

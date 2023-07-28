@@ -12,5 +12,5 @@ struct Request {
 struct Reply {
     sessionId   @0 :UInt32;
     operationId @1 :UInt32;
-    data        @2 :Float32;
+    data        @2 :Data;
 }

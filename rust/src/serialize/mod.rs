@@ -26,20 +26,20 @@ pub struct KvData;
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Action {
     Get(String),
-    Set(String, u64),
+    Set(String, String),
     Remove(String),
 }
 
 impl ApplicationData for KvData{
     type Request = Arc<Action>;
-    type Reply = Arc<Option<u64>>;
+    type Reply = Arc<Option<String>>;
 
     fn serialize_request<W>(w: W, request: &Self::Request) -> Result<()> where W: Write {
         let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
         let mut rq_msg: messages_capnp::request::Builder = root.init_root();
     
-        rq_msg.set_data();
+        rq_msg.set_action(bincode::serialize(request).unwrap().as_slice());
 
         capnp::serialize::write_message(w, &root)
             .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to serialize request")
@@ -53,9 +53,9 @@ impl ApplicationData for KvData{
         let request_msg : messages_capnp::request::Reader = reader.get_root()
             .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read request message")?;
 
-            let _data = request_msg.get_data().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get data")?;
-    
-            Ok(Arc::new(_data))
+            let _data = request_msg.get_action().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get data")?;
+            let action : Action = bincode::deserialize(_data).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get data")?;
+            Ok(Arc::new(action))
         
     }
 
@@ -63,7 +63,7 @@ impl ApplicationData for KvData{
         let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
         let mut rq_msg: messages_capnp::reply::Builder = root.init_root();
-        rq_msg.set_data(**reply);
+        rq_msg.set_data(bincode::serialize(reply).unwrap().as_slice());
       
         capnp::serialize::write_message(w, &root)
             .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to serialize reply")
@@ -77,9 +77,9 @@ impl ApplicationData for KvData{
         let request_msg : messages_capnp::reply::Reader = reader.get_root()
             .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
 
-        let _data = request_msg.get_data();
-
-        Ok(Arc::new(_data))
+        let _data = request_msg.get_data().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
+        let rep: Option<String> = bincode::deserialize(_data).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
+        Ok(Arc::new(rep))
     }
 }
 

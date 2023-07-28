@@ -240,6 +240,7 @@ dependencies = [
  "rand_core",
  "rayon",
  "ring",
+ "rocksdb",
  "rustls 0.21.2",
  "serde",
  "serde-big-array",
@@ -924,110 +925,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "febft-capnp"
-version = "0.1.0"
-dependencies = [
- "capnp",
- "capnpc",
-]
-
-[[package]]
-name = "febft-common"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "crossbeam-channel",
- "crossbeam-skiplist",
- "dashmap",
- "dsrust",
- "either",
- "env_logger",
- "event-listener",
- "fastrand",
- "flume",
- "futures",
- "fxhash",
- "linked-hash-map",
- "log",
- "log4rs",
- "num-bigint",
- "num-traits",
- "oneshot",
- "rand_core",
- "rayon",
- "ring",
- "rocksdb",
- "rustls 0.21.2",
- "serde",
- "serde-big-array",
- "socket2",
- "thiserror",
- "thread_local",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "webpki",
-]
-
-[[package]]
-name = "febft-communication"
-version = "0.1.0"
-dependencies = [
- "bincode 2.0.0-rc.3",
- "bytes",
- "chrono",
- "dashmap",
- "either",
- "fastrand",
- "febft-common",
- "febft-metrics",
- "futures",
- "futures-timer",
- "intmap",
- "log",
- "rustls 0.21.2",
- "serde",
- "serde_bytes",
- "smallvec",
- "tokio-rustls",
-]
-
-[[package]]
-name = "febft-execution"
-version = "0.1.0"
-dependencies = [
- "febft-common",
- "febft-communication",
- "febft-metrics",
- "serde",
-]
-
-[[package]]
-name = "febft-messages"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "febft-common",
- "febft-communication",
- "febft-execution",
- "log",
- "serde",
-]
-
-[[package]]
-name = "febft-metrics"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "febft-common",
- "influxdb",
-]
-
-[[package]]
 name = "febft-pbft-consensus"
 version = "0.1.0"
 dependencies = [
  "async-tls",
+ "atlas-capnp",
+ "atlas-common",
+ "atlas-communication",
+ "atlas-core",
+ "atlas-execution",
+ "atlas-metrics",
  "bincode 2.0.0-rc.3",
  "bytes",
  "capnp",
@@ -1038,12 +945,6 @@ dependencies = [
  "env_logger",
  "event-listener",
  "fastrand",
- "febft-capnp",
- "febft-common",
- "febft-communication",
- "febft-execution",
- "febft-messages",
- "febft-metrics",
  "futures",
  "futures-timer",
  "intmap",

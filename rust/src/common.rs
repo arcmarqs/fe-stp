@@ -269,11 +269,11 @@ pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<KvData>>;
 pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
-pub type OrderProtocol = PBFTOrderProtocol<KvData, StateTransferMessage, ReplicaNetworking>;
+pub type OrderProtocol = PBFTOrderProtocol<KvData, StateTransferMessage,LogTransferMessage, ReplicaNetworking, Logging>;
 pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type StateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
+pub type DivStateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = DivStReplica<StateOrchestrator, KVApp, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = DivStReplica<StateOrchestrator, KVApp, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
 
 pub async fn setup_client(
     n: usize,
@@ -341,7 +341,7 @@ pub async fn setup_replica(
 
     let service = KVApp::default();
 
-    let conf = ReplicaConfig::<StateOrchestrator, KvData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
+    let conf = ReplicaConfig::<StateOrchestrator, KvData, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
         node,
         view: SeqNo::ZERO,
         next_consensus_seq: SeqNo::ZERO,

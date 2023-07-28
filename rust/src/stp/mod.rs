@@ -1061,6 +1061,13 @@ where
     }
 }
 
+impl<S, NT, PL> PersistableStateTransferProtocol for BtStateTransfer<S, NT, PL>
+where
+    S: DivisibleState + 'static + Send + Clone,
+    PL: DivisibleStateLog<S> + 'static,
+{
+}
+
 impl<S, NT, PL> DivisibleStateTransfer<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
     S: DivisibleState + 'static + Send + Clone,
