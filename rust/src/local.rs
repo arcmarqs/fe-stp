@@ -18,7 +18,7 @@ use febft_pbft_consensus::bft::{PBFT};
 use atlas_client::client::Client;
 use atlas_client::client::ordered_client::Ordered;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
-use atlas_common::{async_runtime as rt, channel, init, InitConfig};
+use atlas_common::{async_runtime as rt, channel, init, InitConfig, prng};
 use atlas_common::node_id::NodeId;
 use atlas_communication::tcpip::{PeerAddr, TcpNode};
 
@@ -30,9 +30,13 @@ pub fn main() {
         .map(|x| x == "1")
         .unwrap_or(false);
 
+    let single_server = std::env::var("SINGLE_SERVER")
+    .map(|x| x == "1")
+    .unwrap_or(false);
+
     let conf = InitConfig {
         threadpool_threads: 5,
-        async_threads: 2,
+        async_threads: num_cpus::get() / 1,
         id: None
     };
 
@@ -41,7 +45,11 @@ pub fn main() {
     println!("Starting...");
 
     if !is_client {
+        if !single_server {
         main_();
+        } else {
+            run_single_server();            
+        }
     } else {
         client_async_main();
     }
@@ -142,6 +150,87 @@ fn main_() {
     for mut x in pending_threads {
         x.join();
     }
+}
+
+fn run_single_server() {
+    let clients_config = parse_config("./config/clients.config").unwrap();
+    let replicas_config = parse_config("./config/replicas.config").unwrap();
+
+    println!("Read configurations.");
+
+    let mut secret_keys: IntMap<KeyPair> = sk_stream()
+        .take(replicas_config.len())
+        .enumerate()
+        .map(|(id, sk)| (id as u64, sk))
+        .collect();
+    let public_keys: IntMap<PublicKey> = secret_keys
+        .iter()
+        .map(|(id, sk)| (*id, sk.public_key().into()))
+        .collect();
+
+    println!("Read keys.");
+
+    let first_cli = NodeId::from(1000u32);
+    let replica_id: usize = std::env::args()
+    .nth(1).expect("No replica specified")
+    .trim().parse().expect("Expected an integer");
+
+    let replica = &replicas_config[replica_id];
+
+    let id = NodeId::from(replica.id);
+
+    println!("Starting replica {:?}", id);
+
+    let addrs = {
+        let mut addrs = IntMap::new();
+
+        for other in &replicas_config {
+            let id = NodeId::from(other.id);
+            let addr = format!("{}:{}", other.ipaddr, other.portno);
+            let replica_addr = format!("{}:{}", other.ipaddr, other.rep_portno.unwrap());
+
+            let client_addr = PeerAddr::new_replica(crate::addr!(&other.hostname => addr),
+                                                    crate::addr!(&other.hostname => replica_addr));
+
+            addrs.insert(id.into(), client_addr);
+        }
+
+        for client in &clients_config {
+            let id = NodeId::from(client.id);
+            let addr = format!("{}:{}", client.ipaddr, client.portno);
+
+            let replica = PeerAddr::new(crate::addr!(&client.hostname => addr));
+
+            addrs.insert(id.into(), replica);
+        }
+
+        addrs
+    };
+
+    let sk = secret_keys.remove(id.into()).unwrap();
+
+    println!("Setting up replica...");
+    let fut = setup_replica(
+        replicas_config.len(),
+        id,
+        sk,
+        addrs,
+        public_keys.clone(),
+        None
+    );
+
+        let mut replica = rt::block_on(async move {
+            println!("Bootstrapping replica #{}", u32::from(id));
+            let mut replica = fut.await.unwrap();
+            println!("Running replica #{}", u32::from(id));
+            replica
+        });
+
+        replica.run().unwrap();
+    //We will only launch a single OS monitoring thread since all replicas also run on the same system
+   // crate::os_statistics::start_statistics_thread(NodeId(0));
+
+    drop((secret_keys, public_keys, clients_config, replicas_config));
 }
 
 fn client_async_main() {
@@ -273,11 +362,24 @@ fn sk_stream() -> impl Iterator<Item=KeyPair> {
 }
 
 fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<String>>) {
-    let concurrent_rqs: usize = get_concurrent_rqs();
 
     let id = u32::from(client.id());
 
-    println!("Warm up...");
+    let mut rng = prng::State::new();
+    for u in 0..1000 {
+        
+        let request = {
+            let i = rng.next_state();
+            if i & 1 == 0 { Action::Set(i.to_string(), i.to_string()) } else if u%10 == 0 { Action::Remove(i.to_string()) } else { Action::Get(i.to_string()) }
+        };
 
-    
+        println!("{:?} // Sending req {:?}...", client.id(), request);
+
+        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+            println!("state: {:?}", reply);
+        }
+     
+
+    }
+     
 }

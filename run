@@ -5,8 +5,8 @@ main() {
     import_env $@
     update_max_fds
 
-    # exec
-    select_backend
+    cd $BACKEND 2>/dev/null || die Error: Invalid backend: $BACKEND
+    ./run "$2"
 }
 
 die() {
@@ -17,7 +17,6 @@ die() {
 import_env() {
     unset _JAVA_OPTIONS
     . ./env_id 2> /dev/null || die Error: No ID env file found: env_id
-
     if [ $ID -ge 1000 ]; then
       . ./env_cli 2>/dev/null || die Error: No environment file found: env
     else
@@ -36,6 +35,7 @@ import_env() {
             ;;
         clients)
             export CLIENT=1
+            export SINGLE_SERVER=0
             ;;
         servers)
             export CLIENT=0
@@ -47,7 +47,7 @@ import_env() {
 }
 
 check_env() {
-    _NEED_ENV="LOCAL NUM_CLIENTS NUM_REPLICAS BATCH_SIZE ID BACKEND VERBOSE \
+    _NEED_ENV="LOCAL SINGLE_SERVER NUM_CLIENTS NUM_REPLICAS BATCH_SIZE ID BACKEND VERBOSE \
         OPS_NUMBER MEASUREMENT_INTERVAL STATE_SIZE REPLY_SIZE REQUEST_SIZE \
         REQUEST_SLEEP_MILLIS UPDATE_MAX_FDS COMPILE CONCURRENT_RQS CLIENTS_PER_POOL \
         BATCH_TIMEOUT_MICROS BATCH_SLEEP_MICROS GLOBAL_BATCH_SIZE GLOBAL_BATCH_SLEEP_MICROS"
@@ -78,11 +78,6 @@ update_max_fds() {
             die Error: Failed to update max open file descriptors!
         fi
     fi
-}
-
-select_backend() {
-    cd $BACKEND 2>/dev/null || die Error: Invalid backend: $BACKEND
-    exec ./run
 }
 
 main $@

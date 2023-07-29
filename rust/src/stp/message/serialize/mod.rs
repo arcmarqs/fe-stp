@@ -12,7 +12,7 @@ use super::StMessage;
 
 pub struct STMsg<S> (PhantomData<S>);
 
-impl<S: DivisibleState + Serialize + for<'a> Deserialize<'a>> StateTransferMessage for STMsg<S> {
+impl<S: DivisibleState + for<'a> Deserialize<'a> + Serialize> StateTransferMessage for STMsg<S> {
 
     type StateTransferMessage = StMessage<S>;
 

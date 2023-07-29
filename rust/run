@@ -4,8 +4,7 @@ main() {
     generate_conf
     compile
     #delete_log
-    select_test_name
-    exec_microbenchmarks
+    exec_stp $1
 }
 
 delete_log() {
@@ -44,49 +43,9 @@ compile() {
     [ $COMPILE -eq 1 ] && ./compile
 }
 
-select_test_name() {
-  #Create a monotonically increasing ID which stores its previous state in a file
-  #This is used to generate unique test names, and should match across machines
-
-  FILE="config/previd${ID}"
-
-  #If the file previd doesn't exist, create it
-  if [ ! -f $FILE ]; then
-    echo 0 > $FILE
-  fi
-
-  #Read the previous ID from previd file
-  prev_id=$(cat $FILE)
-
-  #Increment the ID
-  new_id=$((prev_id+1))
-
-  #Write the new ID to the previd file
-  echo $new_id > $FILE
-
-  export INFLUX_EXTRA_TEST=$(printf "%05d" $new_id)
-
-  echo "Test label: ${INFLUX_EXTRA_TEST}"
+exec_stp() {
+  exec ./target/release/fe-stp "$1"
 }
 
-exec_microbenchmarks() {
-
-  PIDS=()
-
-  if [ $ID -ge 1000 ]; then
-    for i in $(seq 0 "$(expr "$NUM_CLIENTS" - 1)"); do
-      exec ./target/release/fe-stp "$(expr $ID + $i)" &
-      PID1=$!
-      PIDS+=("$PID1")
-    done
-
-    for pid in ${PIDS[*]}; do
-      wait $pid
-    done
-  else
-    exec ./target/release/fe-stp
-  fi
-}
-
-main
+main $1
 #sudo apt install linux-tools-5.15 && echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid

@@ -258,7 +258,7 @@ async fn node_config(
 
 /// Set up the data handles so we initialize the networking layer
 pub type OrderProtocolMessage = PBFTConsensus<KvData>;
-pub type StateTransferMessage = STMsg<SerializedState>;
+pub type StateTransferMessage = STMsg<StateOrchestrator>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have
@@ -266,14 +266,14 @@ pub type ReplicaNetworking = MIOTcpNode<ServiceMsg<KvData, OrderProtocolMessage,
 pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles
-pub type Logging = DivisibleStatePersistentLog<SerializedState, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
+pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
 pub type OrderProtocol = PBFTOrderProtocol<KvData, StateTransferMessage,LogTransferMessage, ReplicaNetworking, Logging>;
 pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type DivStateTransferProtocol = BtStateTransfer<SerializedState, ReplicaNetworking, Logging>;
+pub type DivStateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = DivStReplica<SerializedState, KVApp, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = DivStReplica<StateOrchestrator, KVApp, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
 
 pub async fn setup_client(
     n: usize,

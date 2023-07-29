@@ -5,3 +5,5 @@
 /config
 /*.vim
 /log
+/PERSISTENT_DB_*
+../DATABASE_NODE

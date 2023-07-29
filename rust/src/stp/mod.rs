@@ -77,15 +77,19 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             req_parts: Vec::default(),
         }
     }
+
+    pub fn descriptor(&self) -> &Option<S::StateDescriptor> {
+        &self.descriptor
+    }
     pub fn get_digest(&self) -> Option<&Digest> {
-        match self.descriptor {
+        match &self.descriptor {
             Some(descriptor) => Some(descriptor.get_digest()),
             None => None,
         }
     }
 
     pub fn get_seqno(&self) -> Option<SeqNo> {
-        match self.descriptor {
+        match &self.descriptor {
             Some(descriptor) => Some(descriptor.sequence_number()),
             None => None,
         }
@@ -113,7 +117,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
         for part in new_parts {
             part_path = format!("{}{}", self.path, part.id().to_string());
-            if let Ok(f) = OpenOptions::new()
+            if let Ok(mut f) = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
@@ -128,15 +132,20 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         
     }
 
-    pub fn get_parts(&self, parts_desc: &Vec<S::PartDescription>) -> Result<Vec<S::StatePart>> {
+    fn get_file(&mut self, id: &u64) ->Option<&mut (File,u64)> {
+        self.parts.get_mut(id)
+    }
+
+    pub fn get_parts(&mut self, parts_desc: &Vec<S::PartDescription>) -> Result<Vec<S::StatePart>> {
         let mut ret = Vec::new();
         let mut buf = Vec::new();
         for part_desc in parts_desc.iter() {
-            let (mut file, len) = self.parts.get(part_desc.id()).unwrap();
+           if let Some((file, len)) = self.get_file(part_desc.id()) {
             assert_eq!(len.clone(), file.read_to_end(&mut buf)? as u64);
             let part = bincode::deserialize::<S::StatePart>(buf.as_slice())
                 .wrapped(ErrorKind::CommunicationSerialize)?;
             ret.push(part);
+           }
         }
 
         Ok(ret)
@@ -278,7 +287,7 @@ macro_rules! getmessage {
 
 impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static + Send + Clone + Serialize + for<'a> Deserialize<'a>,
+    S: DivisibleState + 'static + Send + Clone + for<'a> Deserialize<'a> + Serialize,
     PL: DivisibleStateLog<S> + 'static,
 {
     type Serialization = STMsg<S>;
@@ -309,7 +318,7 @@ where
         V: NetworkView,
     {
         let (header, inner_message) = message.into_inner();
-
+        let kind = inner_message.kind().clone();
         let st_message = inner_message.into_inner();
 
         debug!(
@@ -320,7 +329,7 @@ where
             st_message.sequence_number()
         );
 
-        match &inner_message.kind() {
+        match kind {
             MessageKind::RequestLatestSeq => {
                 self.process_request_seq::<D, OP, LP>(header, st_message);
 
@@ -328,8 +337,10 @@ where
             }
             MessageKind::RequestStateDescriptor => {
                 self.process_request_descriptor::<D, OP, LP>(header, st_message);
+
+                return Ok(());
             }
-            MessageKind::ReqState(pids) => {
+            MessageKind::ReqState(_) => {
                 self.process_request_state::<D, OP, LP>(header, st_message);
 
                 return Ok(());
@@ -414,7 +425,6 @@ where
             }
             StStatus::ReqState => self.request_latest_state(view)?,
             StStatus::State(state) => {
-                let start = Instant::now();
 
                 self.install_channel
                     .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
@@ -424,13 +434,12 @@ where
             }
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
-                if Some(descriptor) != self.checkpoint.descriptor {
-                    
+                let my_descriptor = self.checkpoint.descriptor().as_ref();
+                if my_descriptor != Some(&descriptor) {
                     self.checkpoint.req_parts = match &self.checkpoint.descriptor {
                         Some(descriptor) => descriptor.compare_descriptors(descriptor),
                         None => descriptor.parts().clone(),
                     };
-
                     self.request_latest_state(view)?;
                 } else {
                     return Ok(STResult::StateTransferNotNeeded(descriptor.sequence_number()));
@@ -439,7 +448,6 @@ where
 
             }
             StStatus::PartiallyComplete(state) => {
-                let start = Instant::now();
 
                 self.install_channel
                     .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
@@ -464,7 +472,12 @@ where
         NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
         V: NetworkView,
     {
-        Ok(ExecutionResult::BeginCheckpoint)
+        if self.checkpoint.descriptor.is_none() {
+            Ok(ExecutionResult::BeginCheckpoint)
+        } else {
+            Ok(ExecutionResult::Nil)
+        }
+
     }
 
     fn handle_timeout<D, OP, LP, V>(
@@ -497,7 +510,7 @@ type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> =
 // TODO: request timeouts
 impl<S, NT, PL> BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static + Serialize + for<'a> Deserialize<'a>,
+    S: DivisibleState + 'static + for<'a> Deserialize<'a> + Serialize,
     PL: DivisibleStateLog<S> + 'static,
 {
     /// Create a new instance of `BtStateTransfer`.
@@ -707,7 +720,7 @@ where
             }
         }
 
-        let state = match &self.checkpoint.descriptor {
+        let state = match self.checkpoint.descriptor() {
             Some(state) => state,
             _ => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
@@ -719,7 +732,7 @@ where
 
                 return;
             }
-        };
+        }.clone();
 
         let st_frag = match message.kind() {
             MessageKind::ReqState(req_parts) => {
@@ -743,7 +756,7 @@ where
         self.node.send(network_msg, header.from(), true).unwrap();
     }
 
-    pub fn process_request_descriptor<D, OP, LP>(&self, header: Header, message: StMessage<S>)
+    pub fn process_request_descriptor<D, OP, LP>(&mut self, header: Header, message: StMessage<S>)
     where
         D: ApplicationData + 'static,
         OP: OrderingProtocolMessage + 'static,
@@ -935,10 +948,10 @@ where
                 };
                 
                 let mut accepted_descriptor = Vec::new();
-                for received_part in **state.st_frag {
+                for received_part in state.st_frag.iter() {
                     if self.checkpoint.req_parts.contains(received_part.descriptor()) {
                         accepted_descriptor.push(received_part.descriptor().clone());
-                        self.accepted_state_parts.push(received_part);
+                        self.accepted_state_parts.push(received_part.clone());
                     }
                 }
 
@@ -1041,7 +1054,7 @@ where
         // Overloading the replicas
         let mut message;
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
-        let parts_map = self.checkpoint.distribute_req_parts(targets, view.n()-1);
+        let parts_map = self.checkpoint.distribute_req_parts(targets.clone(), view.n()-1);
 
         for target in targets {
             message = StMessage::new(cst_seq, MessageKind::ReqState(parts_map.get(&target).unwrap().clone()));
@@ -1068,7 +1081,7 @@ where
 
 impl<S, NT, PL> DivisibleStateTransfer<S, NT, PL> for BtStateTransfer<S, NT, PL>
 where
-    S: DivisibleState + 'static + Send + Clone,
+    S: DivisibleState + 'static + Send + Clone + for<'a> Deserialize<'a> + Serialize,
     PL: DivisibleStateLog<S> + 'static,
 {
     type Config = StateTransferConfig;
