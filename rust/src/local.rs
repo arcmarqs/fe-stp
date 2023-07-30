@@ -221,7 +221,7 @@ fn run_single_server() {
 
         let mut replica = rt::block_on(async move {
             println!("Bootstrapping replica #{}", u32::from(id));
-            let mut replica = fut.await.unwrap();
+            let replica = fut.await.unwrap();
             println!("Running replica #{}", u32::from(id));
             replica
         });
@@ -362,15 +362,12 @@ fn sk_stream() -> impl Iterator<Item=KeyPair> {
 }
 
 fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<String>>) {
+    let id = client.id();
 
-    let id = u32::from(client.id());
-
-    let mut rng = prng::State::new();
     for u in 0..1000 {
-        
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = {
-            let i = rng.next_state();
-            if i & 1 == 0 { Action::Set(i.to_string(), i.to_string()) } else if u%10 == 0 { Action::Remove(i.to_string()) } else { Action::Get(i.to_string()) }
+            Action::Set(kv.clone(), kv.clone())
         };
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
@@ -378,8 +375,32 @@ fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<S
         if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
-     
+    }
 
+    for u in 0..1000 {
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        let request = {
+            Action::Get(kv.clone())
+        };
+
+        println!("{:?} // Sending req {:?}...", client.id(), request);
+
+        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+            println!("state: {:?}", reply);
+        }
+    }
+
+    for u in 0..1000 {
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        let request = {
+            Action::Remove(kv.clone())
+        };
+
+        println!("{:?} // Sending req {:?}...", client.id(), request);
+
+        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+            println!("state: {:?}", reply);
+        }
     }
      
 }

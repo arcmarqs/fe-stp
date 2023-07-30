@@ -1,7 +1,8 @@
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
-use atlas_divisible_state::state_orchestrator::{StateOrchestrator, self};
+use atlas_common::async_runtime::spawn;
+use atlas_divisible_state::state_orchestrator::{StateOrchestrator, self, monitor_changes};
 use atlas_execution::state::divisible_state::DivisibleState;
 use chrono::DateTime;
 use chrono::offset::Utc;
@@ -14,7 +15,6 @@ use crate::serialize;
 
 use crate::serialize::KvData;
 
-
 #[derive(Default)]
 pub struct KVApp;
 
@@ -23,11 +23,13 @@ impl Application<StateOrchestrator> for KVApp {
 
 fn initial_state() -> Result<StateOrchestrator> {
     // create the state
-    let state = StateOrchestrator::new("../database_NODE", );
+    let state = StateOrchestrator::new("./APPDATA_3");   
 
-    //launch the monitoring system
-    state_orchestrator::monitor_changes(state.descriptor.clone(), state.get_subscriber());
-
+    let _ = spawn(
+        monitor_changes(
+            state.descriptor.clone(),
+            state.get_subscriber()));
+            
     Ok(state)
 }
 
@@ -36,6 +38,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
     }
 
 fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
+    println!("Received request: {:?}", request);
        let ivec =  match request.as_ref() {
         serialize::Action::Get(k) => state.db.get(k),
         serialize::Action::Set(k, v) => state.db.insert(k, v),
