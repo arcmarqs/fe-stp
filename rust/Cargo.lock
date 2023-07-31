@@ -208,6 +208,7 @@ dependencies = [
  "atlas-core",
  "atlas-execution",
  "atlas-metrics",
+ "atlas-reconfiguration",
  "futures-timer",
  "intmap",
  "log",
@@ -224,7 +225,6 @@ dependencies = [
  "dashmap",
  "dsrust",
  "either",
- "env_logger",
  "event-listener",
  "fastrand",
  "flume",
@@ -232,7 +232,6 @@ dependencies = [
  "fxhash",
  "linked-hash-map",
  "log",
- "log4rs",
  "mio",
  "num-bigint",
  "num-traits",
@@ -364,6 +363,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-reconfiguration"
+version = "0.1.0"
+dependencies = [
+ "atlas-common",
+ "atlas-communication",
+ "atlas-core",
+ "atlas-metrics",
+ "bincode 2.0.0-rc.3",
+ "futures",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "atlas-replica"
 version = "0.1.0"
 dependencies = [
@@ -373,6 +386,7 @@ dependencies = [
  "atlas-execution",
  "atlas-metrics",
  "atlas-persistent-log",
+ "atlas-reconfiguration",
  "chrono",
  "futures-timer",
  "log",
@@ -843,6 +857,7 @@ dependencies = [
  "atlas-log-transfer",
  "atlas-metrics",
  "atlas-persistent-log",
+ "atlas-reconfiguration",
  "atlas-replica",
  "bincode 1.3.3",
  "capnp",

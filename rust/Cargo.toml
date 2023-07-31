@@ -37,6 +37,7 @@ atlas-replica = { path = "../../Atlas/atlas-replica" }
 atlas-client = { path = "../../Atlas/atlas-client" }
 atlas-metrics = { path = "../../Atlas/atlas-metrics" }
 atlas-persistent-log = { path = "../../Atlas/atlas-persistent-log" }
+atlas-reconfiguration = { path = "../../Atlas/atlas-reconfiguration" }
 atlas-log-transfer = { path = "../../Atlas/atlas-log-transfer", features = ["serialize_serde"] }
 
 [dependencies.febft-pbft-consensus]

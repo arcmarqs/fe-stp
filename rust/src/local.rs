@@ -4,6 +4,7 @@ use std::io::Write;
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+use atlas_common::peer_addr::PeerAddr;
 use chrono::offset::Utc;
 use futures_timer::Delay;
 use intmap::IntMap;
@@ -14,13 +15,12 @@ use nolock::queues::mpsc::jiffy::{
 use rand_core::{OsRng, RngCore};
 use semaphores::RawSemaphore;
 
-use febft_pbft_consensus::bft::{PBFT};
+use febft_pbft_consensus::bft::PBFT;
 use atlas_client::client::Client;
 use atlas_client::client::ordered_client::Ordered;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::{async_runtime as rt, channel, init, InitConfig, prng};
 use atlas_common::node_id::NodeId;
-use atlas_communication::tcpip::{PeerAddr, TcpNode};
 
 use crate::common::*;
 use crate::serialize::{KvData, Action};
@@ -170,7 +170,6 @@ fn run_single_server() {
 
     println!("Read keys.");
 
-    let first_cli = NodeId::from(1000u32);
     let replica_id: usize = std::env::args()
     .nth(1).expect("No replica specified")
     .trim().parse().expect("Expected an integer");
@@ -361,8 +360,9 @@ fn sk_stream() -> impl Iterator<Item=KeyPair> {
     })
 }
 
-fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<String>>) {
+fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
     let id = client.id();
+    println!("run client");
 
     for u in 0..1000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
@@ -372,7 +372,7 @@ fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<S
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
-        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }
@@ -385,7 +385,7 @@ fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<S
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
-        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }
@@ -398,7 +398,7 @@ fn run_client(mut client: Client<KvData, ClientNetworking>, q: Arc<AsyncSender<S
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
-        if let Ok(reply) = rt::block_on(client.update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }

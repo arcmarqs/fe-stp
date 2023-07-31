@@ -23,7 +23,14 @@ impl Application<StateOrchestrator> for KVApp {
 
 fn initial_state() -> Result<StateOrchestrator> {
     // create the state
-    let state = StateOrchestrator::new("./APPDATA_3");   
+
+    let id: u32 = std::env::args()
+    .nth(1).expect("No replica specified")
+    .trim().parse().expect("Expected an integer");
+
+    let path = format!("{}{}", "./appdata_",id);
+
+    let state = StateOrchestrator::new(&path);   
 
     let _ = spawn(
         monitor_changes(

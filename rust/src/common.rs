@@ -6,6 +6,8 @@ use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atlas_common::peer_addr::PeerAddr;
+use atlas_core::smr::networking::NodeWrap;
 use atlas_divisible_state::SerializedState;
 use atlas_divisible_state::state_orchestrator::StateOrchestrator;
 use atlas_execution::state::divisible_state::StatePart;
@@ -23,13 +25,15 @@ use atlas_client::client::unordered_client::UnorderedClientMode;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::error::*;
-use atlas_common::node_id::NodeId;
+use atlas_common::node_id::{NodeId, NodeType};
 use atlas_common::threadpool;
 use atlas_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
 use atlas_communication::mio_tcp::MIOTcpNode;
-use atlas_communication::tcp_ip_simplex::TCPSimplexNode;
-use atlas_communication::tcpip::{PeerAddr, TcpNode};
 use atlas_core::serialize::{ClientServiceMsg, ServiceMsg};
+use atlas_reconfiguration::config::ReconfigurableNetworkConfig;
+use atlas_reconfiguration::message::{NodeTriple, ReconfData};
+use atlas_reconfiguration::network_reconfig::NetworkInfo;
+use atlas_reconfiguration::{ReconfigurableNodeProtocol, ReconfigurableNode};
 use atlas_log_transfer::CollabLogTransfer;
 use atlas_log_transfer::config::LogTransferConfig;
 use atlas_log_transfer::messages::serialize::LTMsg;
@@ -187,13 +191,11 @@ pub fn influx_db_config(id: NodeId) -> InfluxDBArgs {
         extra,
     }
 }
+const BOOSTRAP_NODES: [u32; 4] = [0, 1, 2, 3];
 
 async fn node_config(
     n: usize,
     id: NodeId,
-    sk: KeyPair,
-    addrs: IntMap<PeerAddr>,
-    pk: IntMap<PublicKey>,
     comm_stats: Option<Arc<CommStats>>,
 ) -> MioConfig {
     let first_cli = NodeId::from(1000u32);
@@ -217,7 +219,6 @@ async fn node_config(
     };
 
     let tcp = TcpConfig {
-        addrs,
         network_config: TlsConfig {
             async_client_config: client_config,
             async_server_config: server_config,
@@ -235,17 +236,10 @@ async fn node_config(
         batch_sleep_micros: batch_sleep as u64,
     };
 
-    let pk_config = PKConfig {
-        sk,
-        pk,
-    };
-
     let node_config = NodeConfig {
         id,
-        first_cli,
         tcp_config: tcp,
         client_pool_config: cp,
-        pk_crypto_config: pk_config,
     };
 
     let mio_cfg = MioConfig {
@@ -257,23 +251,55 @@ async fn node_config(
 }
 
 /// Set up the data handles so we initialize the networking layer
-pub type OrderProtocolMessage = PBFTConsensus<KvData>;
+
+pub type ReconfigurationMessage = ReconfData;
+pub type OrderProtocolMessage = PBFTConsensus<KvData,ReconfData>;
 pub type StateTransferMessage = STMsg<StateOrchestrator>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have
-pub type ReplicaNetworking = MIOTcpNode<ServiceMsg<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>;
-pub type ClientNetworking = MIOTcpNode<ClientServiceMsg<KvData>>;
+pub type Network<S> = MIOTcpNode<NetworkInfo, ReconfData, S>;
+pub type ReplicaNetworking = NodeWrap<Network<ServiceMsg<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>, KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage, NetworkInfo, ReconfData>;
+pub type ClientNetworking = Network<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles
 pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
-pub type OrderProtocol = PBFTOrderProtocol<KvData, StateTransferMessage,LogTransferMessage, ReplicaNetworking, Logging>;
+pub type ReconfProtocol = ReconfigurableNodeProtocol;
+pub type OrderProtocol = PBFTOrderProtocol<KvData, ReplicaNetworking, Logging, ReconfigurationMessage>;
 pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type DivStateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
+pub type StateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = DivStReplica<StateOrchestrator, KVApp, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = DivStReplica<ReconfProtocol,StateOrchestrator, KVApp, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRClient = Client<ReconfProtocol, KvData, ClientNetworking>;
+
+pub fn setup_reconf(id: NodeId, sk: KeyPair, addrs: IntMap<PeerAddr>, pk: IntMap<PublicKey>, node_type: NodeType) -> Result<ReconfigurableNetworkConfig> {
+    let own_addr = addrs.get(id.0 as u64).cloned().unwrap();
+
+    let mut known_nodes = Vec::new();
+
+    for boostrap_node in BOOSTRAP_NODES {
+        let boostrap_node_id = NodeId::from(boostrap_node);
+
+        let boostrap_addr = addrs.get(boostrap_node as u64).cloned().unwrap();
+
+        let boostrap_pk = pk.get(boostrap_node as u64).unwrap().pk_bytes().to_vec();
+
+        known_nodes.push(NodeTriple::new(boostrap_node_id, boostrap_pk, boostrap_addr, NodeType::Replica));
+    }
+
+    println!("Known nodes: {:?}", known_nodes);
+
+
+    Ok(ReconfigurableNetworkConfig {
+        node_id: id,
+        node_type,
+        key_pair: sk,
+        our_address: own_addr,
+        known_nodes,
+    })
+}
 
 pub async fn setup_client(
     n: usize,
@@ -282,17 +308,20 @@ pub async fn setup_client(
     addrs: IntMap<PeerAddr>,
     pk: IntMap<PublicKey>,
     comm_stats: Option<Arc<CommStats>>,
-) -> Result<Client<KvData, ClientNetworking>> {
-    let node = node_config(n, id, sk, addrs, pk, comm_stats).await;
+) -> Result<SMRClient> {
+    let reconf = setup_reconf(id, sk, addrs, pk, NodeType::Client)?;
+
+    let node = node_config(n, id, comm_stats).await;
 
     let conf = client::ClientConfig {
         n,
         f: 1,
         unordered_rq_mode: UnorderedClientMode::BFT,
         node,
+        reconfiguration: reconf,
     };
 
-    Client::bootstrap(conf).await
+    Client::<ReconfProtocol, KvData, ClientNetworking>::bootstrap::<OrderProtocol>(conf).await
 }
 
 pub async fn setup_replica(
@@ -306,8 +335,10 @@ pub async fn setup_replica(
     let node_id = id.clone();
     let db_path = format!("PERSISTENT_DB_{:?}", id);
 
+    let reconf_config = setup_reconf(id, sk, addrs, pk, NodeType::Replica)?;
+
     let (node, global_batch_size, global_batch_timeout) = {
-        let n = node_config(n, id, sk, addrs, pk, comm_stats);
+        let n = node_config(n, id, comm_stats);
         let b = get_global_batch_size();
         let timeout = get_global_batch_timeout();
         futures::join!(n, b, timeout)
@@ -329,7 +360,7 @@ pub async fn setup_replica(
 
     let op_config = PBFTConfig::new(node_id, None,
                                     view, timeout_duration.clone(),
-                                    watermark,  proposer_config);
+                                    watermark, proposer_config);
 
     let st_config = StateTransferConfig {
         timeout_duration,
@@ -339,9 +370,9 @@ pub async fn setup_replica(
         timeout_duration,
     };
 
-    let service = KVApp::default();
+    let service = KVApp;
 
-    let conf = ReplicaConfig::<StateOrchestrator, KvData, OrderProtocol, DivStateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
+    let conf = ReplicaConfig::<ReconfProtocol, StateOrchestrator, KvData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
         node,
         view: SeqNo::ZERO,
         next_consensus_seq: SeqNo::ZERO,
@@ -353,6 +384,7 @@ pub async fn setup_replica(
         db_path,
         pl_config: (),
         p: Default::default(),
+        reconfig_node: reconf_config,
     };
 
     let div_conf = DivisibleStateReplicaConfig {
@@ -363,6 +395,7 @@ pub async fn setup_replica(
 
     DivStReplica::bootstrap(div_conf).await
 }
+
 
 async fn get_batch_size() -> usize {
     let (tx, rx) = oneshot::channel();
