@@ -1,7 +1,7 @@
 #![feature(inherent_associated_types)]
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BTreeMap};
 use std::fmt::{write, Debug, Formatter, format};
 use std::fs::{File, OpenOptions, self};
 use std::io::{prelude::*, Seek, SeekFrom, Write};
@@ -18,6 +18,7 @@ use atlas_execution::state::divisible_state::{
     PartDescription, StatePart,
 };
 use log::{debug, error, info};
+use mprober_lib::scanner_rust::generic_array::typenum::Length;
 use serde::{Deserialize, Serialize};
 
 use atlas_common::collections::HashMap;
@@ -136,7 +137,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         self.parts.get_mut(id)
     }
 
-    pub fn get_parts(&mut self, parts_desc: &Vec<S::PartDescription>) -> Result<Vec<S::StatePart>> {
+    pub fn get_parts(&mut self, parts_desc: &Vec<S::PartDescription>) -> Result<Vec<Arc<ReadOnly<S::StatePart>>>> {
         let mut ret = Vec::new();
         let mut buf = Vec::new();
         for part_desc in parts_desc.iter() {
@@ -144,7 +145,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                 assert_eq!(len.clone(), file.read_to_end(&mut buf)? as u64);
                 let part = bincode::deserialize::<S::StatePart>(buf.as_slice())
                     .wrapped(ErrorKind::CommunicationSerialize)?;
-                ret.push(part);
+                ret.push(Arc::new(ReadOnly::new(part)));
             }
         }
 
@@ -156,7 +157,7 @@ enum ProtoPhase<S: DivisibleState> {
     Init,
     WaitingCheckpoint(Vec<StoredMessage<StMessage<S>>>),
     ReceivingCid(usize),
-    ReceivingStateDescriptor,
+    ReceivingStateDescriptor(usize),
     ReceivingState(usize),
 }
 
@@ -172,7 +173,7 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
             ProtoPhase::ReceivingCid(size) => {
                 write!(f, "Receiving CID phase {} responses", size)
             }
-            ProtoPhase::ReceivingStateDescriptor => {
+            ProtoPhase::ReceivingStateDescriptor(usize) => {
                 write!(f, "Receiving state descriptor")
             }
             ProtoPhase::ReceivingState(size) => {
@@ -182,15 +183,10 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
     }
 }
 
-struct ReceivedStateCid {
-    cid: SeqNo,
-    count: usize,
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryState<S: DivisibleState> {
     seq: SeqNo,
-    pub st_frag: Arc<ReadOnly<Vec<S::StatePart>>>,
+    pub st_frag: Vec<Arc<ReadOnly<S::StatePart>>>,
 }
 
 enum StStatus<S: DivisibleState> {
@@ -242,7 +238,6 @@ where
     S: DivisibleState + 'static,
 {
     curr_seq: SeqNo,
-    st_status: StStatus<S>,
     checkpoint: PersistentCheckpoint<S>,
     largest_cid: SeqNo,
     latest_cid_count: usize,
@@ -252,8 +247,9 @@ where
 
     node: Arc<NT>,
     phase: ProtoPhase<S>,
-    received_state_ids: HashMap<Digest, ReceivedStateCid>,
-    accepted_state_parts: Vec<S::StatePart>,
+    received_state_ids: BTreeMap<(SeqNo,Digest),Vec<NodeId>>,
+    accepted_state_parts: Vec<Arc<ReadOnly<S::StatePart>>>,
+    received_state_descriptors: HashMap<(SeqNo,Digest),S::StateDescriptor>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
     /// Persistent logging for the state transfer protocol.
@@ -422,14 +418,6 @@ where
                 }
             }
             StStatus::ReqState => self.request_latest_state(view)?,
-            StStatus::State(state) => {
-                println!("StateTransfer Complete");
-                self.install_channel
-                    .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
-                    .unwrap();
-
-                return Ok(STResult::StateTransferFinished(state.seq));
-            }
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
                 let my_descriptor = self.checkpoint.descriptor().as_ref();
@@ -446,12 +434,25 @@ where
                     ));
                 }
             }
-            StStatus::PartiallyComplete(state) => {
-                println!("Partial State Transfer");
+            StStatus::State(state) => {
+                println!("StateTransfer Complete");
+                let parts: Vec<S::StatePart> = state.st_frag.iter().map(|part| (**part).clone()).collect();
                 self.install_channel
-                    .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
+                    .send(InstallStateMessage::StatePart(parts))
                     .unwrap();
 
+
+                self.received_state_descriptors.clear();
+                self.persistent_log.write_parts_and_descriptor(OperationMode::NonBlockingSync(None), self.checkpoint.descriptor.clone().unwrap(), state.st_frag)?;
+                return Ok(STResult::StateTransferFinished(state.seq));
+            }
+            StStatus::PartiallyComplete(state) => {
+                println!("Partial State Transfer");
+                let parts: Vec<S::StatePart> = state.st_frag.iter().map(|part| (**part).clone()).collect();
+                self.install_channel
+                    .send(InstallStateMessage::StatePart(parts))
+                    .unwrap();
+                self.persistent_log.write_parts(OperationMode::NonBlockingSync(None), state.st_frag)?;
                 self.request_latest_state(view)?;
             }
         }
@@ -516,10 +517,9 @@ where
             curr_seq: SeqNo::ZERO,
             persistent_log,
             install_channel,
-            st_status: StStatus::Nil,
             checkpoint: PersistentCheckpoint::new(id),
-
-            received_state_ids: HashMap::default(),
+            received_state_descriptors: HashMap::default(),
+            received_state_ids: BTreeMap::default(),
             accepted_state_parts: Vec::new(),
         }
     }
@@ -624,7 +624,7 @@ where
         self.timeouts
             .timeout_cst_request(self.curr_timeout, 1, cst_seq);
 
-        self.phase = ProtoPhase::ReceivingStateDescriptor;
+        self.phase = ProtoPhase::ReceivingStateDescriptor(0);
 
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
@@ -712,7 +712,7 @@ where
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
                 seq: state.sequence_number(),
-                st_frag: Arc::new(ReadOnly::new(st_frag)),
+                st_frag,
             }),
         );
 
@@ -821,26 +821,15 @@ where
                         return StStatus::Running;
                     }
                     MessageKind::ReplyLatestSeq(state_cid) => {
-                        if let Some((cid, digest)) = state_cid {
-                            let received_state_cid = self
+                        if let Some(state_cid) = state_cid {
+                            let received_state_from = self
                                 .received_state_ids
-                                .entry(digest.clone())
-                                .or_insert_with(|| ReceivedStateCid {
-                                    cid: *cid,
-                                    count: 0,
-                                });
+                                .entry(*state_cid)
+                                .or_insert_with(|| vec!(header.from()));
 
-                            if *cid > received_state_cid.cid {
-                                //   info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
-                                //        self.node.id(), received_state_cid.cid, *cid, digest);
-
-                                received_state_cid.cid = *cid;
-                                received_state_cid.count = 1;
-                            } else if *cid == received_state_cid.cid {
-                                //   info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
-                                //   self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
-
-                                received_state_cid.count += 1;
+                            if !received_state_from.contains(&header.from()) {
+                                // We received the same state from a different node
+                                received_state_from.push(header.from());
                             }
                         }
                     }
@@ -854,17 +843,18 @@ where
 
                 // check if we have gathered enough cid
                 // replies from peer nodes
-                //
-                // TODO: check for more than one reply from the same node
-                let i = i + 1;
 
-                 println!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+                let i = i + 1;
+                let (largest,voters) = self.received_state_ids.last_key_value().unwrap();
+
+                 debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
                          self.node.id(), view.quorum(), i,
                          self.curr_seq, self.largest_cid, self.latest_cid_count);
 
-                if i == view.quorum() {
+                if i == view.quorum() && voters.len() >= i {
                     self.phase = ProtoPhase::Init;
-
+                 
+                    self.largest_cid = largest.0;
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
@@ -884,13 +874,13 @@ where
             }
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, StStatus::ReqState);
-                println!("receiving state");
 
                 if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
                     return StStatus::Running;
                 }
 
+                println!("message: {:?}", message);
                 let state = match message.take_state() {
                     Some(state) => state,
                     // drop invalid message kinds
@@ -899,6 +889,7 @@ where
 
                 let mut accepted_descriptor = Vec::new();
                 for received_part in state.st_frag.iter() {
+                    println!("received parts {:?}",received_part.id());
                     if self
                         .checkpoint
                         .req_parts
@@ -926,7 +917,7 @@ where
                 let st_frag = self.accepted_state_parts.drain(0..).collect();
                 let st: RecoveryState<S> = RecoveryState {
                     seq: state.seq,
-                    st_frag: Arc::new(ReadOnly::new(st_frag)),
+                    st_frag,
                 };
 
                 self.accepted_state_parts.clear();
@@ -939,7 +930,7 @@ where
                     StStatus::PartiallyComplete(st)
                 }
             }
-            ProtoPhase::ReceivingStateDescriptor => {
+            ProtoPhase::ReceivingStateDescriptor(i) => {
                 let (header, mut message) = getmessage!(progress, StStatus::RequestStateDescriptor);
 
                 let descriptor = match message.take_descriptor() {
@@ -989,13 +980,12 @@ where
     where
         V: NetworkView,
     {
-        //info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
-
+        
         self.accepted_state_parts.clear();
 
-        self.next_seq();
-
         let cst_seq = self.curr_seq;
+
+        println!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts
             .timeout_cst_request(self.curr_timeout, view.quorum() as u32, cst_seq);
@@ -1014,11 +1004,16 @@ where
             .checkpoint
             .distribute_req_parts(targets.clone(), view.n() - 1);
 
-        let _ = parts_map.values().map(|v| v.iter().map(|val| println!("req ids: {:?}",val.id())));
+        for (n,p) in parts_map.iter() {
+            let pids: Vec<&u64> = p.iter().map(|pd| pd.id()).collect();
+            println!("node: {:?} parts: {:?}", n, pids);
+        }
+
         for target in targets {
+            if let Some(req_parts) = parts_map.get(&target){
             message = StMessage::new(
                 cst_seq,
-                MessageKind::ReqState(parts_map.get(&target).unwrap().clone()),
+                MessageKind::ReqState(req_parts.clone()),
             );
 
             self.node.send(
@@ -1026,6 +1021,7 @@ where
                 target,
                 true,
             )?;
+        }
         }
 
         Ok(())

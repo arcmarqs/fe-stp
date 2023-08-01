@@ -5,6 +5,7 @@ Cargo.lock
 /config
 /*.vim
 /log
-./PERSISTENT_DB_*/*
-./appdata_*/*
-./checkpoint_*/*
+/PERSISTENT_DB_*
+/appdata_*
+/checkpoint_*
+/logs
