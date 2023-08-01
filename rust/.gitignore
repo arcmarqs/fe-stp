@@ -1,9 +1,10 @@
 /target
 /latencies.out
-/Cargo.lock
+Cargo.lock
 /ca-root
 /config
 /*.vim
 /log
-/PERSISTENT_DB_*
-../DATABASE_NODE
+./PERSISTENT_DB_*/*
+./appdata_*/*
+./checkpoint_*/*

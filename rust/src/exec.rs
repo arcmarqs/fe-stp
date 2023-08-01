@@ -45,7 +45,6 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
     }
 
 fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
-    println!("Received request: {:?}", request);
        let ivec =  match request.as_ref() {
         serialize::Action::Get(k) => state.db.get(k),
         serialize::Action::Set(k, v) => state.db.insert(k, v),

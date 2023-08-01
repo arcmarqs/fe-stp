@@ -2,9 +2,10 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
-use std::fmt::{write, Debug, Formatter};
-use std::fs::{File, OpenOptions};
+use std::fmt::{write, Debug, Formatter, format};
+use std::fs::{File, OpenOptions, self};
 use std::io::{prelude::*, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -69,10 +70,12 @@ struct PersistentCheckpoint<S: DivisibleState> {
 }
 
 impl<S: DivisibleState> PersistentCheckpoint<S> {
-    pub fn new() -> Self {
+    pub fn new(id: u32) -> Self {
+        let path = format!("./checkpoint_{}/",id);
+        fs::create_dir_all(&path);
         Self {
             descriptor: None,
-            path: String::from("./checkpoint/page"),
+            path,
             parts: HashMap::default(),
             req_parts: Vec::default(),
         }
@@ -91,7 +94,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn get_seqno(&self) -> Option<SeqNo> {
         match &self.descriptor {
             Some(descriptor) => Some(descriptor.sequence_number()),
-            None => None,
+            None => Some(SeqNo::ZERO),
         }
     }
 
@@ -112,19 +115,19 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
     pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts: Vec<S::StatePart>) {
         self.descriptor = Some(descriptor);
-  
         for part in new_parts {
-            let part_path = format!("{}{}", self.path, part.id().to_string());
-            if let Ok(mut f) = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(part_path)
-            {
-                f.seek(SeekFrom::Start(0)).unwrap();
-                let buf = bincode::serialize(&part).unwrap();
-                f.write_all(buf.as_slice()).unwrap();
-                self.parts.insert(part.id(), (f, buf.len() as u64));
+            let part_path = format!("{}part_{}", self.path, part.id().to_string());
+            let f = File::create(&part_path);
+            match f {
+                Ok(mut f) => {
+                    f.seek(SeekFrom::Start(0)).unwrap();
+                    let buf = bincode::serialize(&part).unwrap();
+                    f.write_all(buf.as_slice()).unwrap();
+                    self.parts.insert(part.id(), (f, buf.len() as u64));
+                },
+                Err(e) => {
+                    println!("{:?}",e);
+                },
             }
         }
     }
@@ -312,7 +315,7 @@ where
         let kind = inner_message.kind().clone();
         let st_message = inner_message.into_inner();
 
-        debug!(
+        println!(
             "{:?} // Off context Message {:?} from {:?} with seq {:?}",
             self.node.id(),
             st_message,
@@ -322,6 +325,7 @@ where
 
         match kind {
             MessageKind::RequestLatestSeq => {
+
                 self.process_request_seq(header, st_message);
 
                 return Ok(());
@@ -366,7 +370,7 @@ where
 
         let message = message.into_inner();
 
-        debug!(
+       println!(
             "{:?} // Message {:?} from {:?} while in phase {:?}",
             self.node.id(),
             message,
@@ -376,20 +380,17 @@ where
 
         match message.kind() {
             MessageKind::RequestLatestSeq => {
-                println!("ReqSeq");
                 self.process_request_seq(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
             MessageKind::RequestStateDescriptor => {
-                println!("ReqStateDesc");
 
                 self.process_request_descriptor(header, message);
 
                 return Ok(STResult::StateTransferRunning);
             }
             MessageKind::ReqState(_) => {
-                println!("ReqState");
 
                 self.process_request_state(header, message);
 
@@ -409,8 +410,10 @@ where
             StStatus::Running => (),
             StStatus::ReqLatestCid => self.request_latest_consensus_seq_no(view),
             StStatus::SeqNo(seq) => {
+                println!("Received seqno {:?} my seqno is {:?}", seq, self.checkpoint.get_seqno());
+
                 if self.checkpoint.get_seqno() < Some(seq) {
-                    debug!("{:?} // Requesting state {:?}", self.node.id(), seq);
+                    println!("{:?} // Requesting state descriptor {:?}", self.node.id(), seq);
 
                     self.request_state_descriptor(view);
                 } else {
@@ -420,6 +423,7 @@ where
             }
             StStatus::ReqState => self.request_latest_state(view)?,
             StStatus::State(state) => {
+                println!("StateTransfer Complete");
                 self.install_channel
                     .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
                     .unwrap();
@@ -429,6 +433,7 @@ where
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
                 let my_descriptor = self.checkpoint.descriptor().as_ref();
+                println!("RECEIVED STATE DESC {:?} MY STATE DESC {:?}", &descriptor.get_digest(), self.checkpoint.get_digest());
                 if my_descriptor != Some(&descriptor) {
                     self.checkpoint.req_parts = match &self.checkpoint.descriptor {
                         Some(descriptor) => descriptor.compare_descriptors(descriptor),
@@ -442,6 +447,7 @@ where
                 }
             }
             StStatus::PartiallyComplete(state) => {
+                println!("Partial State Transfer");
                 self.install_channel
                     .send(InstallStateMessage::StatePart(state.st_frag.to_vec()))
                     .unwrap();
@@ -456,11 +462,11 @@ where
     fn handle_app_state_requested<V>(&mut self, view: V, seq: SeqNo) -> Result<ExecutionResult>
     where
         V: NetworkView,
-    {
+    {   
         if self.checkpoint.descriptor.is_none() {
             Ok(ExecutionResult::BeginCheckpoint)
         } else {
-            Ok(ExecutionResult::Nil)
+            Ok(ExecutionResult::BeginCheckpoint)
         }
     }
 
@@ -498,6 +504,7 @@ where
         persistent_log: PL,
         install_channel: ChannelSyncTx<InstallStateMessage<S>>,
     ) -> Self {
+        let id = node.id().0;
         Self {
             base_timeout,
             curr_timeout: base_timeout,
@@ -510,7 +517,7 @@ where
             persistent_log,
             install_channel,
             st_status: StStatus::Nil,
-            checkpoint: PersistentCheckpoint::new(),
+            checkpoint: PersistentCheckpoint::new(id),
 
             received_state_ids: HashMap::default(),
             accepted_state_parts: Vec::new(),
@@ -551,6 +558,7 @@ where
     }
 
     fn timed_out(&mut self, seq: SeqNo) -> StStatus<S> {
+        println!("CALLING TIMEOUT");
         if seq != self.curr_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -581,17 +589,24 @@ where
     }
 
     fn process_request_seq(&mut self, header: Header, message: StMessage<S>) {
+        println!("descriptor {:?}", &self.checkpoint.descriptor.is_some());
         let seq = match &self.checkpoint.descriptor {
             Some(descriptor) => Some((
                 descriptor.sequence_number(),
                 descriptor.get_digest().clone(),
             )),
-            None => None,
+            None => {
+                // We have received no state updates from the app so we have no descriptor
+                Some((SeqNo::ZERO,Digest::blank()))
+            },
         };
 
         let kind = MessageKind::ReplyLatestSeq(seq.clone());
 
         let reply = StMessage::new(message.sequence_number(), kind);
+
+        println!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
+        header.from(), message.sequence_number(), seq);
 
         self.node.send(reply, header.from(), true);
     }
@@ -708,10 +723,8 @@ where
 
 
         match &mut self.phase {
-            ProtoPhase::Init => {println!("phase Init");
-        }
+            ProtoPhase::Init => {}
             ProtoPhase::WaitingCheckpoint(waiting) => {
-                println!("phase Checkpoint");
 
                 waiting.push(StoredMessage::new(header, message));
 
@@ -736,8 +749,6 @@ where
                 return;
             }
         };
-
-        println!("replying");
 
         let reply = StMessage::new(
             message.sequence_number(),
@@ -782,7 +793,6 @@ where
             }
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, StStatus::ReqLatestCid);
-
                 // debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
                 //    i, header.from(), message.sequence_number(), self.curr_seq);
 
@@ -848,9 +858,9 @@ where
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                // debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
-                //         self.node.id(), view.quorum(), i,
-                //         self.curr_seq, self.largest_cid, self.latest_cid_count);
+                 println!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+                         self.node.id(), view.quorum(), i,
+                         self.curr_seq, self.largest_cid, self.latest_cid_count);
 
                 if i == view.quorum() {
                     self.phase = ProtoPhase::Init;
@@ -874,6 +884,7 @@ where
             }
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, StStatus::ReqState);
+                println!("receiving state");
 
                 if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
@@ -1003,6 +1014,7 @@ where
             .checkpoint
             .distribute_req_parts(targets.clone(), view.n() - 1);
 
+        let _ = parts_map.values().map(|v| v.iter().map(|val| println!("req ids: {:?}",val.id())));
         for target in targets {
             message = StMessage::new(
                 cst_seq,
@@ -1013,7 +1025,7 @@ where
                 message,
                 target,
                 true,
-            );
+            )?;
         }
 
         Ok(())
@@ -1052,7 +1064,6 @@ where
         Self: Sized,
     {
         let StateTransferConfig { timeout_duration } = config;
-
         Ok(Self::new(
             node,
             timeout_duration,
@@ -1071,12 +1082,12 @@ where
     where
         V: NetworkView,
     {
-
         if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest())
         {
-            println!("CHECKPOINTING");
-            self.checkpoint.update(descriptor, state);
+            let read_only_parts: Vec<Arc<ReadOnly<<S as DivisibleState>::StatePart>>> = state.iter().map(|p| Arc::new(ReadOnly::new(p.clone()))).collect();
+            self.checkpoint.update(descriptor.clone(), state);
             //TODO: WRITE PARTS TO PERSISTENT LOG
+            self.persistent_log.write_parts_and_descriptor(OperationMode::NonBlockingSync(None), descriptor, read_only_parts)?;
             if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
             } else {
                 return Err(

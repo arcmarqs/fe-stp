@@ -1,54 +1,158 @@
 use std::env;
 use std::fs::File;
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
+use std::sync::atomic::Ordering::Relaxed;
 
 use atlas_common::peer_addr::PeerAddr;
 use chrono::offset::Utc;
 use futures_timer::Delay;
 use intmap::IntMap;
-use nolock::queues::mpsc::jiffy::{
-    async_queue,
-    AsyncSender,
-};
+use nolock::queues::mpsc::jiffy::{async_queue, AsyncSender};
 use rand_core::{OsRng, RngCore};
 use semaphores::RawSemaphore;
 
-use febft_pbft_consensus::bft::PBFT;
-use atlas_client::client::Client;
 use atlas_client::client::ordered_client::Ordered;
+use atlas_client::client::Client;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
-use atlas_common::{async_runtime as rt, channel, init, InitConfig, prng};
+use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
+use atlas_common::{async_runtime as rt, channel, init, prng, InitConfig};
+use febft_pbft_consensus::bft::PBFT;
+use log::LevelFilter;
+use log4rs::append::console::ConsoleAppender;
+use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
+use log4rs::append::rolling_file::policy::compound::trigger::size::SizeTrigger;
+use log4rs::append::rolling_file::policy::compound::trigger::Trigger;
+use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
+use log4rs::append::rolling_file::{LogFile, RollingFileAppender};
+use log4rs::append::Append;
+use log4rs::config::{Appender, Logger, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::filter::threshold::ThresholdFilter;
+use log4rs::Config;
 
 use crate::common::*;
-use crate::serialize::{KvData, Action};
+use crate::serialize::{Action, KvData};
+
+#[derive(Debug)]
+pub struct InitTrigger {
+    has_been_triggered: AtomicBool,
+}
+
+impl Trigger for InitTrigger {
+    fn trigger(&self, file: &LogFile) -> anyhow::Result<bool> {
+        if file.len_estimate() == 0 {
+            println!("Not triggering rollover because file is empty");
+
+            self.has_been_triggered.store(true, Relaxed);
+            return Ok(false);
+        }
+
+        Ok(self
+            .has_been_triggered
+            .compare_exchange(false, true, Relaxed, Relaxed)
+            .is_ok())
+    }
+}
+
+fn format_old_log(id: u32, str: &str) -> String {
+    format!("./logs/log_{}/old/febft{}.log.{}", id, str, "{}")
+}
+
+fn format_log(id: u32, str: &str) -> String {
+    format!("./logs/log_{}/febft{}.log", id, str)
+}
+
+fn policy(id: u32, str: &str) -> CompoundPolicy {
+    let trigger = InitTrigger {
+        has_been_triggered: AtomicBool::new(false),
+    };
+
+    let roller = FixedWindowRoller::builder()
+        .base(1)
+        .build(format_old_log(id, str).as_str(), 5)
+        .wrapped(ErrorKind::MsgLog)
+        .unwrap();
+
+    CompoundPolicy::new(Box::new(trigger), Box::new(roller))
+}
+
+fn file_appender(id: u32, str: &str) -> Box<dyn Append> {
+    Box::new(
+        RollingFileAppender::builder()
+            .encoder(Box::new(PatternEncoder::new("{l} {d} - {m}{n}")))
+            .build(format_log(id, str).as_str(), Box::new(policy(id, str)))
+            .wrapped_msg(ErrorKind::MsgLog, "Failed to create rolling file appender")
+            .unwrap(),
+    )
+}
 
 pub fn main() {
-    let is_client = std::env::var("CLIENT")
+    let is_client = std::env::var("CLIENT").map(|x| x == "1").unwrap_or(false);
+
+    let single_server = std::env::var("SINGLE_SERVER")
         .map(|x| x == "1")
         .unwrap_or(false);
 
-    let single_server = std::env::var("SINGLE_SERVER")
-    .map(|x| x == "1")
-    .unwrap_or(false);
+
+        let id: u32 = std::env::var("ID")
+        .iter()
+        .flat_map(|id| id.parse())
+        .next()
+        .unwrap();
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("comm", file_appender(id, "_comm")))
+        .appender(Appender::builder().build("reconfig", file_appender(id, "_reconfig")))
+        .appender(Appender::builder().build("consensus", file_appender(id, "_consensus")))
+        .appender(Appender::builder().build("file", file_appender(id, "")))
+        .logger(
+            Logger::builder()
+                .appender("comm")
+                .build("atlas_communication", LevelFilter::Warn),
+        )
+        .logger(
+            Logger::builder()
+                .appender("reconfig")
+                .build("atlas_reconfiguration", LevelFilter::Debug),
+        )
+        .logger(
+            Logger::builder()
+                .appender("consensus")
+                .build("febft_pbft_consensus", LevelFilter::Trace),
+        )
+        .build(
+            Root::builder()
+                .appender("file")
+                .build(LevelFilter::Debug),
+        )
+        .wrapped(ErrorKind::MsgLog)
+        .unwrap();
+
+    let _handle = log4rs::init_config(config)
+        .wrapped(ErrorKind::MsgLog)
+        .unwrap();
 
     let conf = InitConfig {
         threadpool_threads: 5,
         async_threads: num_cpus::get() / 1,
-        id: None
+        id: None,
     };
 
     let _guard = unsafe { init(conf).unwrap() };
+
+  
 
     println!("Starting...");
 
     if !is_client {
         if !single_server {
-        main_();
+            main_();
         } else {
-            run_single_server();            
+            run_single_server();
         }
     } else {
         client_async_main();
@@ -91,8 +195,10 @@ fn main_() {
                 let addr = format!("{}:{}", other.ipaddr, other.portno);
                 let replica_addr = format!("{}:{}", other.ipaddr, other.rep_portno.unwrap());
 
-                let client_addr = PeerAddr::new_replica(crate::addr!(&other.hostname => addr),
-                                                        crate::addr!(&other.hostname => replica_addr));
+                let client_addr = PeerAddr::new_replica(
+                    crate::addr!(&other.hostname => addr),
+                    crate::addr!(&other.hostname => replica_addr),
+                );
 
                 addrs.insert(id.into(), client_addr);
             }
@@ -118,25 +224,28 @@ fn main_() {
             sk,
             addrs,
             public_keys.clone(),
-            None
+            None,
         );
 
-        let thread = std::thread::Builder::new().name(format!("Node {:?}", id)).spawn(move || {
-            let mut replica = rt::block_on(async move {
-                println!("Bootstrapping replica #{}", u32::from(id));
-                let mut replica = fut.await.unwrap();
-                println!("Running replica #{}", u32::from(id));
-                replica
-            });
+        let thread = std::thread::Builder::new()
+            .name(format!("Node {:?}", id))
+            .spawn(move || {
+                let mut replica = rt::block_on(async move {
+                    println!("Bootstrapping replica #{}", u32::from(id));
+                    let mut replica = fut.await.unwrap();
+                    println!("Running replica #{}", u32::from(id));
+                    replica
+                });
 
-            barrier.wait();
+                barrier.wait();
 
-            println!("{:?} // Let's go", id);
+                println!("{:?} // Let's go", id);
 
-            barrier.wait();
+                barrier.wait();
 
-            replica.run().unwrap();
-        }).unwrap();
+                replica.run().unwrap();
+            })
+            .unwrap();
 
         pending_threads.push(thread);
     }
@@ -171,8 +280,11 @@ fn run_single_server() {
     println!("Read keys.");
 
     let replica_id: usize = std::env::args()
-    .nth(1).expect("No replica specified")
-    .trim().parse().expect("Expected an integer");
+        .nth(1)
+        .expect("No replica specified")
+        .trim()
+        .parse()
+        .expect("Expected an integer");
 
     let replica = &replicas_config[replica_id];
 
@@ -188,8 +300,10 @@ fn run_single_server() {
             let addr = format!("{}:{}", other.ipaddr, other.portno);
             let replica_addr = format!("{}:{}", other.ipaddr, other.rep_portno.unwrap());
 
-            let client_addr = PeerAddr::new_replica(crate::addr!(&other.hostname => addr),
-                                                    crate::addr!(&other.hostname => replica_addr));
+            let client_addr = PeerAddr::new_replica(
+                crate::addr!(&other.hostname => addr),
+                crate::addr!(&other.hostname => replica_addr),
+            );
 
             addrs.insert(id.into(), client_addr);
         }
@@ -215,19 +329,19 @@ fn run_single_server() {
         sk,
         addrs,
         public_keys.clone(),
-        None
+        None,
     );
 
-        let mut replica = rt::block_on(async move {
-            println!("Bootstrapping replica #{}", u32::from(id));
-            let replica = fut.await.unwrap();
-            println!("Running replica #{}", u32::from(id));
-            replica
-        });
+    let mut replica = rt::block_on(async move {
+        println!("Bootstrapping replica #{}", u32::from(id));
+        let replica = fut.await.unwrap();
+        println!("Running replica #{}", u32::from(id));
+        replica
+    });
 
-        replica.run().unwrap();
+    replica.run().unwrap();
     //We will only launch a single OS monitoring thread since all replicas also run on the same system
-   // crate::os_statistics::start_statistics_thread(NodeId(0));
+    // crate::os_statistics::start_statistics_thread(NodeId(0));
 
     drop((secret_keys, public_keys, clients_config, replicas_config));
 }
@@ -236,18 +350,26 @@ fn client_async_main() {
     let clients_config = parse_config("./config/clients.config").unwrap();
     let replicas_config = parse_config("./config/replicas.config").unwrap();
 
-    let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
+    let mut first_id: u32 = env::var("ID")
+        .unwrap_or(String::from("1000"))
+        .parse()
+        .unwrap();
 
-    let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
+    let client_count: u32 = env::var("NUM_CLIENTS")
+        .unwrap_or(String::from("1"))
+        .parse()
+        .unwrap();
 
     let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(clients_config.len())
         .enumerate()
         .map(|(id, sk)| (first_id as u64 + id as u64, sk))
-        .chain(sk_stream()
-            .take(replicas_config.len())
-            .enumerate()
-            .map(|(id, sk)| (id as u64, sk)))
+        .chain(
+            sk_stream()
+                .take(replicas_config.len())
+                .enumerate()
+                .map(|(id, sk)| (id as u64, sk)),
+        )
         .collect();
     let public_keys: IntMap<PublicKey> = secret_keys
         .iter()
@@ -255,7 +377,6 @@ fn client_async_main() {
         .collect();
 
     let (tx, mut rx) = channel::new_bounded_async(clients_config.len());
-
 
     for i in 0..client_count {
         let id = NodeId::from(i + first_id);
@@ -268,8 +389,10 @@ fn client_async_main() {
                 let addr = format!("{}:{}", replica.ipaddr, replica.portno);
                 let replica_addr = format!("{}:{}", replica.ipaddr, replica.rep_portno.unwrap());
 
-                let replica_p_addr = PeerAddr::new_replica(crate::addr!(&replica.hostname => addr),
-                                                           crate::addr!(&replica.hostname => replica_addr));
+                let replica_p_addr = PeerAddr::new_replica(
+                    crate::addr!(&replica.hostname => addr),
+                    crate::addr!(&replica.hostname => replica_addr),
+                );
 
                 addrs.insert(id.into(), replica_p_addr);
             }
@@ -294,7 +417,7 @@ fn client_async_main() {
             sk,
             addrs,
             public_keys.clone(),
-            None
+            None,
         );
 
         let mut tx = tx.clone();
@@ -329,7 +452,7 @@ fn client_async_main() {
 
         let h = std::thread::Builder::new()
             .name(format!("Client {:?}", client.id()))
-            .spawn(move || { run_client(client, queue_tx) })
+            .spawn(move || run_client(client, queue_tx))
             .expect(format!("Failed to start thread for client {:?} ", &id.id()).as_str());
 
         handles.push(h);
@@ -352,7 +475,7 @@ fn client_async_main() {
     file.flush().unwrap();
 }
 
-fn sk_stream() -> impl Iterator<Item=KeyPair> {
+fn sk_stream() -> impl Iterator<Item = KeyPair> {
     std::iter::repeat_with(|| {
         // only valid for ed25519!
         let buf = [0; 32];
@@ -364,11 +487,9 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
     let id = client.id();
     println!("run client");
 
-    for u in 0..1000 {
+    for u in 0..10000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = {
-            Action::Set(kv.clone(), kv.clone())
-        };
+        let request = { Action::Set(kv.clone(), kv.clone()) };
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
@@ -377,11 +498,9 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
         }
     }
 
-    for u in 0..1000 {
+    for u in 0..10000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = {
-            Action::Get(kv.clone())
-        };
+        let request = { Action::Get(kv.clone()) };
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
@@ -390,11 +509,9 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
         }
     }
 
-    for u in 0..1000 {
+    for u in 0..10000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = {
-            Action::Remove(kv.clone())
-        };
+        let request = { Action::Remove(kv.clone()) };
 
         println!("{:?} // Sending req {:?}...", client.id(), request);
 
@@ -402,5 +519,4 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
             println!("state: {:?}", reply);
         }
     }
-     
 }

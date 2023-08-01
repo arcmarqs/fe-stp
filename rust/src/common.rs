@@ -348,7 +348,7 @@ pub async fn setup_replica(
 
     let proposer_config = ProposerConfig {
         target_batch_size: global_batch_size as u64,
-        max_batch_size: global_batch_size as u64 * 2,
+        max_batch_size: max_batch_size as u64,
         batch_timeout: global_batch_timeout as u64,
     };
 
