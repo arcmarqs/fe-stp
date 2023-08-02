@@ -1,6 +1,6 @@
 #![feature(inherent_associated_types)]
 
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{format, write, Debug, Formatter};
 use std::fs::{self, File, OpenOptions};
@@ -58,7 +58,7 @@ pub struct StateTransferConfig {
     pub timeout_duration: Duration,
 }
 
-type PartRef = (File, u64);
+type PartRef = (String, u64);
 #[derive(Debug, Default)]
 struct PersistentCheckpoint<S: DivisibleState> {
     descriptor: Option<S::StateDescriptor>,
@@ -99,33 +99,39 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    fn distribute_req_parts(
+    /*  fn distribute_req_parts(
         &mut self,
         targets: impl Iterator<Item = NodeId>,
         num_targets: usize,
     ) -> HashMap<NodeId, Vec<S::PartDescription>> {
         let mut ret = HashMap::default();
 
-        let _ = self
+        /*let _ = self
             .req_parts
             .chunks(num_targets)
             .zip(targets)
-            .map(|(chunk, id)| ret.insert(id, chunk.to_vec()));
+            .map(|(chunk, id)|{
+                println!("inserting parts into id {:?}", &id);
+                ret.insert(id, chunk.to_vec())});*/
 
         ret
-    }
+    }*/
 
     pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts: Vec<S::StatePart>) {
         self.descriptor = Some(descriptor);
         for part in new_parts {
             let part_path = format!("{}part_{}", self.path, part.id().to_string());
-            let f = File::create(&part_path);
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(&part_path);
             match f {
                 Ok(mut f) => {
-                    f.seek(SeekFrom::Start(0)).unwrap();
                     let buf = bincode::serialize(&part).unwrap();
-                    f.write_all(buf.as_slice()).unwrap();
-                    self.parts.insert(part.id(), (f, buf.len() as u64));
+                    f.write_all(buf.as_slice());
+                    self.parts.insert(part.id(), (part_path, buf.len() as u64));
+                    f.flush();
                 }
                 Err(e) => {
                     println!("{:?}", e);
@@ -134,8 +140,8 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    fn get_file(&mut self, id: &u64) -> Option<&mut (File, u64)> {
-        self.parts.get_mut(id)
+    fn get_file(&mut self, id: &u64) -> Option<&(String, u64)> {
+        self.parts.get(id)
     }
 
     pub fn get_parts(
@@ -143,13 +149,17 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         parts_desc: &Vec<S::PartDescription>,
     ) -> Result<Vec<Arc<ReadOnly<S::StatePart>>>> {
         let mut ret = Vec::new();
-        let mut buf = Vec::new();
         for part_desc in parts_desc.iter() {
-            if let Some((file, len)) = self.get_file(part_desc.id()) {
-                assert_eq!(len.clone(), file.read_to_end(&mut buf)? as u64);
-                let part = bincode::deserialize::<S::StatePart>(buf.as_slice())
-                    .wrapped(ErrorKind::CommunicationSerialize)?;
-                ret.push(Arc::new(ReadOnly::new(part)));
+            if let Some((path, len)) = self.get_file(part_desc.id()) {
+                let mut buf = Vec::new();
+                if let Ok(mut file) = OpenOptions::new().read(true).open(path) {
+                    file.read_to_end(buf.as_mut())?;
+                    // assert_eq!(buf.len(), len.clone() as usize);
+
+                    let part = bincode::deserialize::<S::StatePart>(buf.as_slice())
+                        .wrapped(ErrorKind::CommunicationSerialize)?;
+                    ret.push(Arc::new(ReadOnly::new(part)));
+                }
             }
         }
 
@@ -426,7 +436,7 @@ where
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             }
-            StStatus::ReqState => self.request_latest_state(view)?,
+            StStatus::ReqState => self.request_latest_state_parts(view)?,
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
                 let my_descriptor = self.checkpoint.descriptor().as_ref();
@@ -440,7 +450,7 @@ where
                         Some(descriptor) => descriptor.compare_descriptors(descriptor),
                         None => descriptor.parts().clone(),
                     };
-                    self.request_latest_state(view)?;
+                    self.request_latest_state_parts(view)?;
                 } else {
                     return Ok(STResult::StateTransferNotNeeded(
                         descriptor.sequence_number(),
@@ -472,7 +482,7 @@ where
                     .unwrap();
                 self.persistent_log
                     .write_parts(OperationMode::NonBlockingSync(None), state.st_frag)?;
-                self.request_latest_state(view)?;
+                self.request_latest_state_parts(view)?;
             }
         }
 
@@ -577,7 +587,6 @@ where
     }
 
     fn timed_out(&mut self, seq: SeqNo) -> StStatus<S> {
-        println!("CALLING TIMEOUT");
         if seq != self.curr_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -892,7 +901,6 @@ where
             }
             ProtoPhase::ReceivingStateDescriptor(i) => {
                 let (header, mut message) = getmessage!(progress, StStatus::RequestStateDescriptor);
-
                 let descriptor = match message.take_descriptor() {
                     Some(descriptor) => descriptor,
                     None => return StStatus::Running,
@@ -900,44 +908,40 @@ where
 
                 let desc_digest = descriptor.get_digest().clone();
 
-                match self.received_state_descriptors.insert(descriptor.sequence_number(), descriptor) {
-                    Some(prev_descriptor)=> {
+                match self
+                    .received_state_descriptors
+                    .insert(descriptor.sequence_number(), descriptor)
+                {
+                    Some(prev_descriptor) => {
                         if prev_descriptor.get_digest() == &desc_digest {
                             {}
                         } else {
-                            error!("Received different descriptor with same sequence number");
+                            println!("Received different descriptor with same sequence number");
                         }
-                    },
-                    None => {},
+                    }
+                    None => {}
                 }
 
-                let i = i+1;
+                let i = i + 1;
 
                 if i == view.quorum() {
                     self.phase = ProtoPhase::Init;
 
-                    if let Some(final_descriptor) = self.received_state_descriptors.get(&self.largest_cid) {
+                    if let Some(final_descriptor) =
+                        self.received_state_descriptors.get(&self.largest_cid)
+                    {
+                        self.curr_timeout = self.base_timeout;
 
-                    // reset timeout, since req was successful
-                    self.curr_timeout = self.base_timeout;
-
-                    //  info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
-                    //          self.node.id(),
-                    //          self.largest_cid, self.latest_cid_count);
-
-                    // we don't need the latest cid to be available in at least
-                    // f+1 replicas since the replica has the proof that the system
-                    // has decided
-                    StStatus::StateDescriptor(final_descriptor.clone())
+                        StStatus::StateDescriptor(final_descriptor.clone())
+                    } else {
+                        StStatus::RequestStateDescriptor
+                    }
                 } else {
-                    StStatus::RequestStateDescriptor
-                }
-                } else {
-                    self.phase = ProtoPhase::ReceivingCid(i);
+                    self.phase = ProtoPhase::ReceivingStateDescriptor(i);
 
                     StStatus::Running
                 }
-            },
+            }
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, StStatus::ReqState);
 
@@ -946,7 +950,6 @@ where
                     return StStatus::Running;
                 }
 
-                println!("message: {:?}", message);
                 let state = match message.take_state() {
                     Some(state) => state,
                     // drop invalid message kinds
@@ -955,7 +958,6 @@ where
 
                 let mut accepted_descriptor = Vec::new();
                 for received_part in state.st_frag.iter() {
-                    println!("received parts {:?}", received_part.id());
                     if self
                         .checkpoint
                         .req_parts
@@ -966,14 +968,26 @@ where
                     }
                 }
 
+                println!(
+                    "accepted {:?} total {:?}",
+                    accepted_descriptor.len(),
+                    state.st_frag.len()
+                );
+
                 let i = i + 1;
 
                 if !self.checkpoint.req_parts.is_empty() {
                     //remove the parts that we accepted
+                    println!("parts: {:?}", self.checkpoint.req_parts.len());
                     self.checkpoint
                         .req_parts
                         .retain(|part| !accepted_descriptor.contains(part));
+                    println!("parts after remove: {:?}", self.checkpoint.req_parts.len());
+                }
+
+                if i < view.quorum() {
                     self.phase = ProtoPhase::ReceivingState(i);
+
                     return StStatus::Running;
                 }
 
@@ -987,12 +1001,16 @@ where
                 };
 
                 self.accepted_state_parts.clear();
-
                 if self.checkpoint.req_parts.is_empty() {
                     self.phase = ProtoPhase::Init;
 
                     StStatus::State(st)
                 } else {
+                    println!(
+                        "still need {:?} parts frag is {:?}",
+                        self.checkpoint.req_parts.len(),
+                        st.st_frag.len()
+                    );
                     StStatus::PartiallyComplete(st)
                 }
             }
@@ -1029,7 +1047,7 @@ where
         self.node.broadcast(message, targets);
     }
 
-    fn request_latest_state<V>(&mut self, view: V) -> Result<()>
+    fn request_latest_state_parts<V>(&mut self, view: V) -> Result<()>
     where
         V: NetworkView,
     {
@@ -1050,7 +1068,7 @@ where
 
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
-        let mut message;
+
         let targets = view
             .quorum_members()
             .clone()
@@ -1058,19 +1076,21 @@ where
             .filter(|id| *id != self.node.id());
         let parts_map = self
             .checkpoint
-            .distribute_req_parts(targets.clone(), view.n() - 1);
+            .req_parts
+            .chunks((self.checkpoint.req_parts.len() / (view.n() - 1)).max(1));
 
-        for (n, p) in parts_map.iter() {
+        println!(
+            "parts per node {:?} total {:?} ",
+            self.checkpoint.req_parts.len() / (view.n() - 1),
+            self.checkpoint.req_parts.len()
+        );
+        for (n, p) in targets.zip(parts_map) {
             let pids: Vec<&u64> = p.iter().map(|pd| pd.id()).collect();
             println!("node: {:?} parts: {:?}", n, pids);
-        }
 
-        for target in targets {
-            if let Some(req_parts) = parts_map.get(&target) {
-                message = StMessage::new(cst_seq, MessageKind::ReqState(req_parts.clone()));
+            let message = StMessage::new(cst_seq, MessageKind::ReqState(p.to_vec()));
 
-                self.node.send(message, target, true)?;
-            }
+            self.node.send(message, n, false)?;
         }
 
         Ok(())
