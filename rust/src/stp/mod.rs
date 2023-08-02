@@ -465,6 +465,7 @@ where
                     .send(InstallStateMessage::StatePart(parts))
                     .unwrap();
 
+                self.checkpoint.descriptor = self.received_state_descriptors.get(&self.largest_cid).unwrap().clone();
                 self.received_state_descriptors.clear();
                 self.persistent_log.write_parts_and_descriptor(
                     OperationMode::NonBlockingSync(None),
@@ -985,7 +986,7 @@ where
                     println!("parts after remove: {:?}", self.checkpoint.req_parts.len());
                 }
 
-                if i < view.quorum() {
+                if i < view.quorum() && !self.checkpoint.req_parts.is_empty() {
                     self.phase = ProtoPhase::ReceivingState(i);
 
                     return StStatus::Running;
