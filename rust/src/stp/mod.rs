@@ -59,15 +59,22 @@ pub struct StateTransferConfig {
 }
 
 type PartRef = (String, u64);
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PersistentCheckpoint<S: DivisibleState> {
     descriptor: Option<S::StateDescriptor>,
+    seqno: SeqNo,
     path: String,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
     parts: HashMap<u64, PartRef>,
     // list of parts we need in orget to recover the state
     req_parts: Vec<S::PartDescription>,
+}
+
+impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
+    fn default() -> Self {
+        Self { descriptor: Default::default(), seqno: SeqNo::ZERO, path: Default::default(), parts: Default::default(), req_parts: Default::default() }
+    }
 }
 
 impl<S: DivisibleState> PersistentCheckpoint<S> {
@@ -79,6 +86,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             path,
             parts: HashMap::default(),
             req_parts: Vec::default(),
+            seqno: SeqNo::ZERO,
         }
     }
 
@@ -92,7 +100,11 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    pub fn get_seqno(&self) -> Option<SeqNo> {
+    pub fn get_seqno(&self) -> SeqNo {
+        self.seqno
+    }
+
+    pub fn get_descriptor_seqno(&self) -> Option<SeqNo> {
         match &self.descriptor {
             Some(descriptor) => Some(descriptor.sequence_number()),
             None => Some(SeqNo::ZERO),
@@ -131,10 +143,9 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                     let buf = bincode::serialize(&part).unwrap();
                     f.write_all(buf.as_slice());
                     self.parts.insert(part.id(), (part_path, buf.len() as u64));
-                    f.flush();
                 }
                 Err(e) => {
-                    println!("{:?}", e);
+                    panic!("Error opening file {:?}",e);
                 }
             }
         }
@@ -150,7 +161,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     ) -> Result<Vec<Arc<ReadOnly<S::StatePart>>>> {
         let mut ret = Vec::new();
         for part_desc in parts_desc.iter() {
-            if let Some((path, len)) = self.get_file(part_desc.id()) {
+            if let Some((path, _)) = self.get_file(part_desc.id()) {
                 let mut buf = Vec::new();
                 if let Ok(mut file) = OpenOptions::new().read(true).open(path) {
                     file.read_to_end(buf.as_mut())?;
@@ -423,7 +434,7 @@ where
                     self.checkpoint.get_seqno()
                 );
 
-                if self.checkpoint.get_seqno() < Some(seq) {
+                if self.checkpoint.get_seqno() < seq {
                     println!(
                         "{:?} // Requesting state descriptor {:?}",
                         self.node.id(),
@@ -432,7 +443,7 @@ where
 
                     self.request_state_descriptor(view);
                 } else {
-                    //debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_state.into(), seq);
+                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_seq, seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             }
@@ -462,16 +473,22 @@ where
                 let parts: Vec<S::StatePart> =
                     state.st_frag.iter().map(|part| (**part).clone()).collect();
                 self.install_channel
-                    .send(InstallStateMessage::StatePart(parts))
+                    .send(InstallStateMessage::StatePart(parts.clone()))
                     .unwrap();
 
-                self.checkpoint.descriptor = self.received_state_descriptors.get(&self.largest_cid).unwrap().clone();
+                let descriptor = self
+                    .received_state_descriptors
+                    .get(&self.largest_cid)
+                    .unwrap()
+                    .clone();
+                self.checkpoint.update(descriptor, parts);
                 self.received_state_descriptors.clear();
                 self.persistent_log.write_parts_and_descriptor(
                     OperationMode::NonBlockingSync(None),
                     self.checkpoint.descriptor.clone().unwrap(),
                     state.st_frag,
                 )?;
+
                 return Ok(STResult::StateTransferFinished(state.seq));
             }
             StStatus::PartiallyComplete(state) => {
@@ -479,10 +496,16 @@ where
                 let parts: Vec<S::StatePart> =
                     state.st_frag.iter().map(|part| (**part).clone()).collect();
                 self.install_channel
-                    .send(InstallStateMessage::StatePart(parts))
+                    .send(InstallStateMessage::StatePart(parts.clone()))
                     .unwrap();
                 self.persistent_log
                     .write_parts(OperationMode::NonBlockingSync(None), state.st_frag)?;
+                let descriptor = self
+                    .received_state_descriptors
+                    .get(&self.largest_cid)
+                    .unwrap()
+                    .clone();
+                self.checkpoint.update(descriptor, parts);
                 self.request_latest_state_parts(view)?;
             }
         }
@@ -494,10 +517,12 @@ where
     where
         V: NetworkView,
     {
-        if self.checkpoint.descriptor.is_none() {
+        let log_descriptor = self.persistent_log.read_local_descriptor()?;
+        if self.checkpoint.descriptor != log_descriptor || self.checkpoint.descriptor.is_none(){
+            println!("Begin Checkpoint");
             Ok(ExecutionResult::BeginCheckpoint)
         } else {
-            Ok(ExecutionResult::BeginCheckpoint)
+            Ok(ExecutionResult::Nil)
         }
     }
 
@@ -618,10 +643,10 @@ where
     }
 
     fn process_request_seq(&mut self, header: Header, message: StMessage<S>) {
-        println!("descriptor {:?}", &self.checkpoint.descriptor.is_some());
+
         let seq = match &self.checkpoint.descriptor {
             Some(descriptor) => Some((
-                descriptor.sequence_number(),
+                self.checkpoint.get_descriptor_seqno().unwrap(),
                 descriptor.get_digest().clone(),
             )),
             None => {
@@ -629,6 +654,7 @@ where
                 Some((SeqNo::ZERO, Digest::blank()))
             }
         };
+        
 
         let kind = MessageKind::ReplyLatestSeq(seq.clone());
 
@@ -742,7 +768,7 @@ where
         let reply = StMessage::new(
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
-                seq: state.sequence_number(),
+                seq:self.checkpoint.get_seqno(),
                 st_frag,
             }),
         );
@@ -914,11 +940,7 @@ where
                     .insert(descriptor.sequence_number(), descriptor)
                 {
                     Some(prev_descriptor) => {
-                        if prev_descriptor.get_digest() == &desc_digest {
-                            {}
-                        } else {
-                            println!("Received different descriptor with same sequence number");
-                        }
+                        error!("{:?} // Received descriptor {:?} with different digest {:?} should be {:?}", self.node.id(), prev_descriptor.sequence_number(),&desc_digest,prev_descriptor.get_digest());
                     }
                     None => {}
                 }
@@ -969,21 +991,13 @@ where
                     }
                 }
 
-                println!(
-                    "accepted {:?} total {:?}",
-                    accepted_descriptor.len(),
-                    state.st_frag.len()
-                );
-
                 let i = i + 1;
 
                 if !self.checkpoint.req_parts.is_empty() {
                     //remove the parts that we accepted
-                    println!("parts: {:?}", self.checkpoint.req_parts.len());
                     self.checkpoint
                         .req_parts
                         .retain(|part| !accepted_descriptor.contains(part));
-                    println!("parts after remove: {:?}", self.checkpoint.req_parts.len());
                 }
 
                 if i < view.quorum() && !self.checkpoint.req_parts.is_empty() {
@@ -1007,11 +1021,6 @@ where
 
                     StStatus::State(st)
                 } else {
-                    println!(
-                        "still need {:?} parts frag is {:?}",
-                        self.checkpoint.req_parts.len(),
-                        st.st_frag.len()
-                    );
                     StStatus::PartiallyComplete(st)
                 }
             }
@@ -1080,15 +1089,8 @@ where
             .req_parts
             .chunks((self.checkpoint.req_parts.len() / (view.n() - 1)).max(1));
 
-        println!(
-            "parts per node {:?} total {:?} ",
-            self.checkpoint.req_parts.len() / (view.n() - 1),
-            self.checkpoint.req_parts.len()
-        );
         for (n, p) in targets.zip(parts_map) {
-            let pids: Vec<&u64> = p.iter().map(|pd| pd.id()).collect();
-            println!("node: {:?} parts: {:?}", n, pids);
-
+            
             let message = StMessage::new(cst_seq, MessageKind::ReqState(p.to_vec()));
 
             self.node.send(message, n, false)?;
@@ -1148,6 +1150,8 @@ where
     where
         V: NetworkView,
     {
+
+        println!("received appstate need checkpoint {:?} my diges {:?} other digest {:?}", self.needs_checkpoint(), self.checkpoint.get_digest(), descriptor.get_digest());
         if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest())
         {
             let read_only_parts: Vec<Arc<ReadOnly<<S as DivisibleState>::StatePart>>> = state
