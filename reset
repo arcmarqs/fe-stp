@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rm -rf /rust/PERSISTENT_DB_*
-rm -rf /rust/checkpoint_*
-rm -rf /rust/appdata_*
-rm -rf /rust/logs
+rm -rf ./rust/PERSISTENT_DB_*
+rm -rf ./rust/checkpoint_*
+rm -rf ./rust/appdata_*
+rm -rf ./rust/logs

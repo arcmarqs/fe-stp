@@ -45,13 +45,16 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
     }
 
 fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
+
        let ivec =  match request.as_ref() {
         serialize::Action::Get(k) => state.db.get(k),
         serialize::Action::Set(k, v) => state.db.insert(k, v),
         serialize::Action::Remove(k) => state.db.remove(k),
     }.unwrap();
 
+
         let reply_inner = ivec.map(|x| String::from_utf8(x.to_vec()).unwrap());
+        //println!("request {:?} reply {:?}",request, reply_inner);
 
         Arc::new(reply_inner)
     }
