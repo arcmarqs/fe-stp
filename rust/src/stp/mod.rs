@@ -130,7 +130,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }*/
     
     // since some parts might have changed we need to recalculate the descriptor
-    fn update_descriptor(&mut self,descriptor: S::StateDescriptor, state: Vec<S::StatePart>) {
+    fn update_descriptor(&mut self, state: Vec<S::StatePart>) {
         /*  
         need to redo state descriptor logic 
             1 - descriptor must be modified to accurately reflect the pages underneath
@@ -138,10 +138,12 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             3 - 
 
         */
+
+        
     }
 
-    pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts: Vec<S::StatePart>) {
-        self.update_descriptor(descriptor, new_parts);
+    pub fn update(&mut self, new_parts: Vec<S::StatePart>) {
+        self.update_descriptor(new_parts);
         for part in new_parts {
             let part_path = format!("{} part_{}", self.path, part.id().to_string());
             let f = OpenOptions::new()
@@ -1156,21 +1158,20 @@ where
     fn handle_state_received_from_app<V>(
         &mut self,
         view: V,
-        descriptor: S::StateDescriptor,
         state: Vec<S::StatePart>,
     ) -> Result<()>
     where
         V: NetworkView,
     {
 
-        println!("received appstate need checkpoint {:?} my diges {:?} other digest {:?}", self.needs_checkpoint(), self.checkpoint.get_digest(), descriptor.get_digest());
-        if self.needs_checkpoint() || self.checkpoint.get_digest() != Some(descriptor.get_digest())
+        //println!("received appstate need checkpoint {:?} my diges {:?} other digest {:?}", self.needs_checkpoint(), self.checkpoint.get_digest(), descriptor.get_digest());
+        for parts in state
         {
             let read_only_parts: Vec<Arc<ReadOnly<<S as DivisibleState>::StatePart>>> = state
                 .iter()
                 .map(|p| Arc::new(ReadOnly::new(p.clone())))
                 .collect();
-            self.checkpoint.update(descriptor.clone(), state);
+            self.checkpoint.update(state);
             //TODO: WRITE PARTS TO PERSISTENT LOG
             self.persistent_log.write_parts_and_descriptor(
                 OperationMode::NonBlockingSync(None),
