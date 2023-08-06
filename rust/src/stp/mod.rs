@@ -80,7 +80,7 @@ impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
 impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn new(id: u32) -> Self {
         let path = format!("./checkpoint_{}/", id);
-        fs::create_dir_all(&path);
+        fs::create_dir(&path);
         Self {
             descriptor: None,
             path,
@@ -99,7 +99,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             None => None,
         }
     }
-
+    
     pub fn get_seqno(&self) -> SeqNo {
         self.seqno
     }
@@ -128,11 +128,22 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
         ret
     }*/
+    
+    // since some parts might have changed we need to recalculate the descriptor
+    fn update_descriptor(&mut self,descriptor: S::StateDescriptor, state: Vec<S::StatePart>) {
+        /*  
+        need to redo state descriptor logic 
+            1 - descriptor must be modified to accurately reflect the pages underneath
+            2 - 
+            3 - 
+
+        */
+    }
 
     pub fn update(&mut self, descriptor: S::StateDescriptor, new_parts: Vec<S::StatePart>) {
-        self.descriptor = Some(descriptor);
+        self.update_descriptor(descriptor, new_parts);
         for part in new_parts {
-            let part_path = format!("{}part_{}", self.path, part.id().to_string());
+            let part_path = format!("{} part_{}", self.path, part.id().to_string());
             let f = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -273,7 +284,7 @@ where
     node: Arc<NT>,
     phase: ProtoPhase<S>,
     received_state_ids: BTreeMap<(SeqNo, Digest), Vec<NodeId>>,
-    accepted_state_parts: Vec<Arc<ReadOnly<S::StatePart>>>,
+    accepted_state_parts: BTreeMap<u64,Arc<ReadOnly<S::StatePart>>>,
     received_state_descriptors: HashMap<SeqNo, S::StateDescriptor>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
@@ -481,6 +492,7 @@ where
                     .get(&self.largest_cid)
                     .unwrap()
                     .clone();
+                
                 self.checkpoint.update(descriptor, parts);
                 self.received_state_descriptors.clear();
                 self.persistent_log.write_parts_and_descriptor(
@@ -575,7 +587,7 @@ where
             checkpoint: PersistentCheckpoint::new(id),
             received_state_descriptors: HashMap::default(),
             received_state_ids: BTreeMap::default(),
-            accepted_state_parts: Vec::new(),
+            accepted_state_parts: BTreeMap::new(),
         }
     }
 
@@ -987,7 +999,7 @@ where
                         .contains(received_part.descriptor())
                     {
                         accepted_descriptor.push(received_part.descriptor().clone());
-                        self.accepted_state_parts.push(received_part.clone());
+                        self.accepted_state_parts.insert(received_part.id(),received_part.clone());
                     }
                 }
 
@@ -1009,7 +1021,7 @@ where
                 // reset timeout, since req was successful
                 self.curr_timeout = self.base_timeout;
 
-                let st_frag = self.accepted_state_parts.drain(0..).collect();
+                let st_frag = self.accepted_state_parts.values().map(|v| v.clone()).collect();
                 let st: RecoveryState<S> = RecoveryState {
                     seq: state.seq,
                     st_frag,
@@ -1162,7 +1174,7 @@ where
             //TODO: WRITE PARTS TO PERSISTENT LOG
             self.persistent_log.write_parts_and_descriptor(
                 OperationMode::NonBlockingSync(None),
-                descriptor,
+                self.checkpoint.descriptor,
                 read_only_parts,
             )?;
             if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
