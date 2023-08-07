@@ -1,51 +1,38 @@
 #![feature(inherent_associated_types)]
 
-use std::cmp::{min, Ordering};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{format, write, Debug, Formatter};
-use std::fs::{self, File, OpenOptions};
-use std::io::{prelude::*, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::fs::{self, OpenOptions};
+use std::io::{prelude::*, Write};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use atlas_common::channel::ChannelSyncTx;
+use atlas_core::ordering_protocol::ExecutionResult;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
-use atlas_divisible_state::state_orchestrator::{StateDescriptor, StateOrchestrator};
-use atlas_divisible_state::state_tree::LeafNode;
-use atlas_execution::state::divisible_state::{
-    AppStateMessage, DivisibleState, DivisibleStateDescriptor, InstallStateMessage,
-    PartDescription, StatePart,
+use atlas_divisible_state::SerializedTree;
+use atlas_divisible_state::state_tree::{LeafNode, StateTree};
+use atlas_execution::state::divisible_state::{DivisibleState, DivisibleStateDescriptor, InstallStateMessage,
+    PartDescription, StatePart, PartId,
 };
 use log::{debug, error, info};
-use mprober_lib::scanner_rust::generic_array::typenum::Length;
 use serde::{Deserialize, Serialize};
 
-use atlas_common::collections::HashMap;
-use atlas_common::collections::{self, HashSet, OrderedMap};
+use atlas_common::collections::{HashMap, self};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage};
-use atlas_core::messages::{StateTransfer, SystemMessage};
-use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
+use atlas_communication::message::{Header,StoredMessage};
+use atlas_core::messages::StateTransfer;
 use atlas_core::persistent_log::{
     DivisibleStateLog, OperationMode, PersistableStateTransferProtocol,
 };
-use atlas_core::serialize::{
-    LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StateTransferMessage,
-    StatefulOrderProtocolMessage,
-};
+use atlas_core::serialize::NetworkView;
 use atlas_core::state_transfer::divisible_state::*;
-use atlas_core::state_transfer::{
-    divisible_state, Checkpoint, CstM, STResult, STTimeoutResult, StateTransferProtocol,
-};
+use atlas_core::state_transfer::{CstM, STResult, STTimeoutResult, StateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use atlas_divisible_state::*;
-use atlas_execution::app::{Application, Reply, Request};
-use atlas_execution::serialize::ApplicationData;
 
 use crate::stp::message::MessageKind;
 
@@ -61,9 +48,10 @@ pub struct StateTransferConfig {
 type PartRef = (String, u64);
 #[derive(Debug)]
 struct PersistentCheckpoint<S: DivisibleState> {
-    descriptor: Option<S::StateDescriptor>,
-    seqno: SeqNo,
+    tree: StateTree,
     path: String,
+    seqno: SeqNo,
+    descriptor: Option<S::StateDescriptor>,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
     parts: HashMap<u64, PartRef>,
@@ -73,7 +61,7 @@ struct PersistentCheckpoint<S: DivisibleState> {
 
 impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
     fn default() -> Self {
-        Self { descriptor: Default::default(), seqno: SeqNo::ZERO, path: Default::default(), parts: Default::default(), req_parts: Default::default() }
+        Self { tree: Default::default(), seqno: SeqNo::ZERO,descriptor: None,path: Default::default(), parts: Default::default(), req_parts: Default::default() }
     }
 }
 
@@ -82,22 +70,30 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         let path = format!("./checkpoint_{}/", id);
         fs::create_dir(&path);
         Self {
-            descriptor: None,
+            tree: StateTree::default(),
             path,
             parts: HashMap::default(),
             req_parts: Vec::default(),
             seqno: SeqNo::ZERO,
+            descriptor: None,
         }
     }
 
-    pub fn descriptor(&self) -> &Option<S::StateDescriptor> {
-        &self.descriptor
+    fn update_descriptor(&mut self) {
+       self.descriptor = match self.tree.full_serialized_tree() {
+        Ok(d) => Some(d),
+        Err(_) => None,
+       };
+    }
+
+    pub fn descriptor(&self) -> Option<&S::StateDescriptor> {
+       self.descriptor.as_ref()
     }
     pub fn get_digest(&self) -> Option<&Digest> {
-        match &self.descriptor {
-            Some(descriptor) => Some(descriptor.get_digest()),
-            None => None,
-        }
+       match &self.descriptor {
+        Some(d) => Some(d.get_digest()),
+        None => None,
+    }
     }
     
     pub fn get_seqno(&self) -> SeqNo {
@@ -130,21 +126,9 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }*/
     
     // since some parts might have changed we need to recalculate the descriptor
-    fn update_descriptor(&mut self, state: Vec<S::StatePart>) {
-        /*  
-        need to redo state descriptor logic 
-            1 - descriptor must be modified to accurately reflect the pages underneath
-            2 - 
-            3 - 
-
-        */
-
-        
-    }
-
     pub fn update(&mut self, new_parts: Vec<S::StatePart>) {
-        self.update_descriptor(new_parts);
         for part in new_parts {
+            self.tree.insert(self.tree.seqno,part.id(),part.descriptor().content_description());
             let part_path = format!("{} part_{}", self.path, part.id().to_string());
             let f = OpenOptions::new()
                 .read(true)
@@ -162,6 +146,8 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                 }
             }
         }
+        self.update_descriptor();
+        self.tree.seqno.next();
     }
 
     fn get_file(&mut self, id: &u64) -> Option<&(String, u64)> {
@@ -463,7 +449,7 @@ where
             StStatus::ReqState => self.request_latest_state_parts(view)?,
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
-                let my_descriptor = self.checkpoint.descriptor().as_ref();
+                let my_descriptor = self.checkpoint.descriptor();
                 println!(
                     "RECEIVED STATE DESC {:?} MY STATE DESC {:?}",
                     &descriptor.get_digest(),
@@ -495,7 +481,7 @@ where
                     .unwrap()
                     .clone();
                 
-                self.checkpoint.update(descriptor, parts);
+                self.checkpoint.update(parts);
                 self.received_state_descriptors.clear();
                 self.persistent_log.write_parts_and_descriptor(
                     OperationMode::NonBlockingSync(None),
@@ -519,7 +505,7 @@ where
                     .get(&self.largest_cid)
                     .unwrap()
                     .clone();
-                self.checkpoint.update(descriptor, parts);
+                self.checkpoint.update(parts);
                 self.request_latest_state_parts(view)?;
             }
         }
@@ -1135,6 +1121,8 @@ where
 {
     type Config = StateTransferConfig;
 
+    type StateDescriptor = SerializedTree;
+
     fn initialize(
         config: Self::Config,
         timeouts: Timeouts,
@@ -1165,8 +1153,6 @@ where
     {
 
         //println!("received appstate need checkpoint {:?} my diges {:?} other digest {:?}", self.needs_checkpoint(), self.checkpoint.get_digest(), descriptor.get_digest());
-        for parts in state
-        {
             let read_only_parts: Vec<Arc<ReadOnly<<S as DivisibleState>::StatePart>>> = state
                 .iter()
                 .map(|p| Arc::new(ReadOnly::new(p.clone())))
@@ -1175,7 +1161,7 @@ where
             //TODO: WRITE PARTS TO PERSISTENT LOG
             self.persistent_log.write_parts_and_descriptor(
                 OperationMode::NonBlockingSync(None),
-                self.checkpoint.descriptor,
+                self.checkpoint.descriptor.clone().unwrap(),
                 read_only_parts,
             )?;
             if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
@@ -1185,8 +1171,6 @@ where
                 )
                 .wrapped(ErrorKind::Cst);
             }
-        }
-
         Ok(())
     }
 }

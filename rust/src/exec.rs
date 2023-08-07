@@ -34,7 +34,7 @@ fn initial_state() -> Result<StateOrchestrator> {
 
     let _ = spawn(
         monitor_changes(
-            state.descriptor.clone(),
+            state.updates.clone(),
             state.get_subscriber()));
             
     Ok(state)
