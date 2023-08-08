@@ -265,7 +265,7 @@ where
     node: Arc<NT>,
     phase: ProtoPhase<S>,
     received_state_ids: BTreeMap<(SeqNo, Digest), Vec<NodeId>>,
-    accepted_state_parts: BTreeMap<u64,Arc<ReadOnly<S::StatePart>>>,
+    accepted_state_parts: Vec<(u64,Arc<ReadOnly<S::StatePart>>)>,
     received_state_descriptors: HashMap<SeqNo, S::StateDescriptor>,
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
 
@@ -469,8 +469,6 @@ where
                     .unwrap()
                     .clone();
 
-                let pids: Vec<u64> = descriptor.parts().iter().map(|part| part.id().clone()).collect();
-
                 let parts: Vec<S::StatePart> =
                     state.st_frag.iter().map(|part| (**part).clone()).collect();
 
@@ -481,8 +479,6 @@ where
                     self.checkpoint.descriptor.clone().unwrap(),
                     state.st_frag,
                 )?;
-
-                println!("order should be: {:?}", pids);
 
                 self.install_channel
                     .send(InstallStateMessage::StatePart(parts))
@@ -582,7 +578,7 @@ where
             checkpoint: PersistentCheckpoint::new(id),
             received_state_descriptors: HashMap::default(),
             received_state_ids: BTreeMap::default(),
-            accepted_state_parts: BTreeMap::new(),
+            accepted_state_parts: Vec::new(),
         }
     }
 
