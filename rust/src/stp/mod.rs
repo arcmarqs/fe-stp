@@ -462,25 +462,33 @@ where
             }
             StStatus::State(state) => {
                 println!("StateTransfer Complete");
-                let parts: Vec<S::StatePart> =
-                    state.st_frag.iter().map(|part| (**part).clone()).collect();
-                self.install_channel
-                    .send(InstallStateMessage::StatePart(parts.clone()))
-                    .unwrap();
 
                 let descriptor = self
                     .received_state_descriptors
                     .get(&self.largest_cid)
                     .unwrap()
                     .clone();
-                
-                self.checkpoint.update(parts,descriptor);
-                self.received_state_descriptors.clear();
+
+                let pids: Vec<u64> = descriptor.parts().iter().map(|part| part.id().clone()).collect();
+
+                let parts: Vec<S::StatePart> =
+                    state.st_frag.iter().map(|part| (**part).clone()).collect();
+
+                self.checkpoint.update(parts.clone(), descriptor);
+
                 self.persistent_log.write_parts_and_descriptor(
                     OperationMode::NonBlockingSync(None),
                     self.checkpoint.descriptor.clone().unwrap(),
                     state.st_frag,
                 )?;
+
+                println!("order should be: {:?}", pids);
+
+                self.install_channel
+                    .send(InstallStateMessage::StatePart(parts))
+                    .unwrap();
+
+                self.received_state_descriptors.clear();
 
                 return Ok(STResult::StateTransferFinished(state.seq));
             }
@@ -488,17 +496,23 @@ where
                 println!("Partial State Transfer");
                 let parts: Vec<S::StatePart> =
                     state.st_frag.iter().map(|part| (**part).clone()).collect();
-                self.install_channel
-                    .send(InstallStateMessage::StatePart(parts.clone()))
-                    .unwrap();
-                self.persistent_log
-                    .write_parts(OperationMode::NonBlockingSync(None), state.st_frag)?;
                 let descriptor = self
                     .received_state_descriptors
                     .get(&self.largest_cid)
                     .unwrap()
                     .clone();
-                self.checkpoint.update(parts,descriptor);
+
+                self.checkpoint.update(parts.clone(), descriptor);
+
+                self.persistent_log
+                    .write_parts(OperationMode::NonBlockingSync(None), state.st_frag)?;
+
+                self.install_channel
+                    .send(InstallStateMessage::StatePart(parts))
+                    .unwrap();
+
+                self.install_channel.send(InstallStateMessage::Done).unwrap();
+
                 self.request_latest_state_parts(view)?;
             }
         }
@@ -1143,6 +1157,7 @@ where
     where
         V: NetworkView,
     {
+        println!("received state from app, {:?}", descriptor.get_digest());
 
         //println!("received appstate need checkpoint {:?} my diges {:?} other digest {:?}", self.needs_checkpoint(), self.checkpoint.get_digest(), descriptor.get_digest());
             let read_only_parts: Vec<Arc<ReadOnly<<S as DivisibleState>::StatePart>>> = state
