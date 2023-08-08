@@ -48,7 +48,6 @@ pub struct StateTransferConfig {
 type PartRef = (String, u64);
 #[derive(Debug)]
 struct PersistentCheckpoint<S: DivisibleState> {
-    tree: StateTree,
     path: String,
     seqno: SeqNo,
     descriptor: Option<S::StateDescriptor>,
@@ -61,7 +60,7 @@ struct PersistentCheckpoint<S: DivisibleState> {
 
 impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
     fn default() -> Self {
-        Self { tree: Default::default(), seqno: SeqNo::ZERO,descriptor: None,path: Default::default(), parts: Default::default(), req_parts: Default::default() }
+        Self {seqno: SeqNo::ZERO,descriptor: None,path: Default::default(), parts: Default::default(), req_parts: Default::default() }
     }
 }
 
@@ -70,7 +69,6 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         let path = format!("./checkpoint_{}/", id);
         fs::create_dir(&path);
         Self {
-            tree: StateTree::default(),
             path,
             parts: HashMap::default(),
             req_parts: Vec::default(),
@@ -80,10 +78,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }
 
     fn update_descriptor(&mut self) {
-       self.descriptor = match self.tree.full_serialized_tree() {
-        Ok(d) => Some(d),
-        Err(_) => None,
-       };
+    
     }
 
     pub fn descriptor(&self) -> Option<&S::StateDescriptor> {
@@ -126,9 +121,8 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }*/
     
     // since some parts might have changed we need to recalculate the descriptor
-    pub fn update(&mut self, new_parts: Vec<S::StatePart>) {
+    pub fn update(&mut self, new_parts: Vec<S::StatePart>,descriptor: S::StateDescriptor) {
         for part in new_parts {
-            self.tree.insert(self.tree.seqno,part.id(),part.descriptor().content_description());
             let part_path = format!("{} part_{}", self.path, part.id().to_string());
             let f = OpenOptions::new()
                 .read(true)
@@ -146,8 +140,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                 }
             }
         }
-        self.update_descriptor();
-        self.tree.seqno.next();
+        self.descriptor = Some(descriptor);
     }
 
     fn get_file(&mut self, id: &u64) -> Option<&(String, u64)> {
@@ -481,7 +474,7 @@ where
                     .unwrap()
                     .clone();
                 
-                self.checkpoint.update(parts);
+                self.checkpoint.update(parts,descriptor);
                 self.received_state_descriptors.clear();
                 self.persistent_log.write_parts_and_descriptor(
                     OperationMode::NonBlockingSync(None),
@@ -505,7 +498,7 @@ where
                     .get(&self.largest_cid)
                     .unwrap()
                     .clone();
-                self.checkpoint.update(parts);
+                self.checkpoint.update(parts,descriptor);
                 self.request_latest_state_parts(view)?;
             }
         }
@@ -1121,8 +1114,6 @@ where
 {
     type Config = StateTransferConfig;
 
-    type StateDescriptor = SerializedTree;
-
     fn initialize(
         config: Self::Config,
         timeouts: Timeouts,
@@ -1146,6 +1137,7 @@ where
     fn handle_state_received_from_app<V>(
         &mut self,
         view: V,
+        descriptor: S::StateDescriptor,
         state: Vec<S::StatePart>,
     ) -> Result<()>
     where
@@ -1157,7 +1149,7 @@ where
                 .iter()
                 .map(|p| Arc::new(ReadOnly::new(p.clone())))
                 .collect();
-            self.checkpoint.update(state);
+            self.checkpoint.update(state,descriptor);
             //TODO: WRITE PARTS TO PERSISTENT LOG
             self.persistent_log.write_parts_and_descriptor(
                 OperationMode::NonBlockingSync(None),
