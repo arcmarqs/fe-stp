@@ -1,6 +1,5 @@
 /target
 /latencies.out
-Cargo.lock
 /ca-root
 /config
 /*.vim
@@ -9,3 +8,4 @@ Cargo.lock
 /appdata_*
 /checkpoint_*
 /logs
+Cargo.lock
