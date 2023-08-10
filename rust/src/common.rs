@@ -253,7 +253,7 @@ async fn node_config(
 /// Set up the data handles so we initialize the networking layer
 
 pub type ReconfigurationMessage = ReconfData;
-pub type OrderProtocolMessage = PBFTConsensus<KvData,ReconfData>;
+pub type OrderProtocolMessage = PBFTConsensus<KvData>;
 pub type StateTransferMessage = STMsg<StateOrchestrator>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
@@ -267,7 +267,7 @@ pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderP
 
 /// Set up the protocols with the types that have been built up to here
 pub type ReconfProtocol = ReconfigurableNodeProtocol;
-pub type OrderProtocol = PBFTOrderProtocol<KvData, ReplicaNetworking, Logging, ReconfigurationMessage>;
+pub type OrderProtocol = PBFTOrderProtocol<KvData, ReplicaNetworking, Logging>;
 pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
 pub type StateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
 

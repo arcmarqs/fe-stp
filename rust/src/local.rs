@@ -6,6 +6,7 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use std::sync::atomic::Ordering::Relaxed;
 
+use atlas_client::concurrent_client::ConcurrentClient;
 use atlas_common::peer_addr::PeerAddr;
 use chrono::offset::Utc;
 use futures_timer::Delay;
@@ -486,14 +487,15 @@ fn sk_stream() -> impl Iterator<Item = KeyPair> {
 fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
     let id = client.id();
     println!("run client");
-
+    let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
+    
     for u in 0..10000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = { Action::Set(kv.clone(), kv.clone()) };
 
-        println!("{:?} // Sending req {:?}...", client.id(), request);
+        println!("{:?} // Sending req {:?}...", id.0, request);
 
-        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }
@@ -502,9 +504,9 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = { Action::Get(kv.clone()) };
 
-        println!("{:?} // Sending req {:?}...", client.id(), request);
+        println!("{:?} // Sending req {:?}...", id, request);
 
-        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }
@@ -513,9 +515,9 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = { Action::Remove(kv.clone()) };
 
-        println!("{:?} // Sending req {:?}...", client.id(), request);
+        println!("{:?} // Sending req {:?}...", id.0, request);
 
-        if let Ok(reply) = rt::block_on(client.clone().update::<Ordered>(Arc::from(request))) {
+        if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }

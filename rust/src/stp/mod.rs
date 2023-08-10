@@ -526,8 +526,7 @@ where
     where
         V: NetworkView,
     {
-        let log_descriptor = self.persistent_log.read_local_descriptor()?;
-        if self.checkpoint.descriptor != log_descriptor || self.checkpoint.descriptor.is_none(){
+        if self.checkpoint.get_seqno() < seq || (seq != SeqNo::ZERO && self.checkpoint.descriptor.is_none()){
             Ok(ExecutionResult::BeginCheckpoint)
         } else {
             Ok(ExecutionResult::Nil)
@@ -1155,11 +1154,14 @@ where
     where
         V: NetworkView,
     {
-        println!("received state from app, {:?}", descriptor.get_digest());
-        self.checkpoint.seqno = seq_no;
+        println!("received state from app, {:?} my seqno {:?} seqno {:?}", descriptor.get_digest(), self.checkpoint.get_seqno(), seq_no);
+
+        if self.checkpoint.get_seqno() < seq_no {
+            self.checkpoint.seqno = seq_no;
+        }
 
         if Some(&descriptor) != self.checkpoint.descriptor() {
-
+            println!("installing parts");
             self.checkpoint.update(state);
     
             self.checkpoint.update_descriptor(descriptor);
