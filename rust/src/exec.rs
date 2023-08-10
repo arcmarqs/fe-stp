@@ -54,7 +54,7 @@ fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, State
 
 
         let reply_inner = ivec.map(|x| String::from_utf8(x.to_vec()).unwrap());
-        //println!("request {:?} reply {:?}",request, reply_inner);
+        println!("request {:?} reply {:?}",request, reply_inner);
 
         Arc::new(reply_inner)
     }

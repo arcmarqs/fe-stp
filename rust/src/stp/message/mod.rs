@@ -51,7 +51,7 @@ pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
     ReplyLatestSeq(Option<(SeqNo, Digest)>),
     RequestStateDescriptor,
-    ReplyStateDescriptor(Option<S::StateDescriptor>),
+    ReplyStateDescriptor(Option<(SeqNo,S::StateDescriptor)>),
     ReqState(Vec<S::PartDescription>),
     ReplyState(RecoveryState<S>),
 }
@@ -87,7 +87,7 @@ impl<S> StMessage<S> where S: DivisibleState {
         }
     }
 
-    pub fn take_descriptor(&mut self) -> Option<S::StateDescriptor> {
+    pub fn take_descriptor(&mut self) -> Option<(SeqNo,S::StateDescriptor)> {
         let kind = std::mem::replace(&mut self.kind, MessageKind::RequestStateDescriptor);
         match kind {
             MessageKind::ReplyStateDescriptor(descriptor) => descriptor,

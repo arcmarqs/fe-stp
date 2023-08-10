@@ -344,6 +344,9 @@ pub async fn setup_replica(
         futures::join!(n, b, timeout)
     };
 
+    println!("timeout {:?}", global_batch_timeout);
+
+
     let max_batch_size = get_max_batch_size();
 
     let proposer_config = ProposerConfig {

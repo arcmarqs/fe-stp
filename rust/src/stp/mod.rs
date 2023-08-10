@@ -470,8 +470,9 @@ where
                 );
 
                 if my_descriptor == Some(&descriptor) {
+                    self.checkpoint.seqno = self.largest_cid;
                     return Ok(STResult::StateTransferNotNeeded(
-                        descriptor.sequence_number(),
+                        self.checkpoint.get_seqno(),
                     ));
                    
                 } else {
@@ -514,7 +515,7 @@ where
                 
                 self.install_channel.send(InstallStateMessage::Done).unwrap();
 
-                return Ok(STResult::StateTransferFinished(seq));
+                return Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()));
             }
         }
 
@@ -652,7 +653,7 @@ where
 
         let seq = match &self.checkpoint.descriptor {
             Some(descriptor) => Some((
-                self.checkpoint.get_descriptor_seqno().unwrap(),
+                self.checkpoint.get_seqno(),
                 descriptor.get_digest().clone(),
             )),
             None => {
@@ -812,7 +813,7 @@ where
 
         let reply = StMessage::new(
             message.sequence_number(),
-            MessageKind::ReplyStateDescriptor(Some(state.clone())),
+            MessageKind::ReplyStateDescriptor(Some((self.checkpoint.get_seqno(),state.clone()))),
         );
 
         self.node.send(reply, header.from(), true).unwrap();
@@ -939,11 +940,11 @@ where
                     None => return StStatus::Running,
                 };
 
-                let desc_digest = descriptor.get_digest().clone();
+                let desc_digest = descriptor.1.get_digest().clone();
 
                 match self
                     .received_state_descriptors
-                    .insert(descriptor.sequence_number(), descriptor)
+                    .insert(descriptor.0, descriptor.1)
                 {
                     Some(prev_descriptor) => {
                         error!("{:?} // Received descriptor {:?} with different digest {:?} should be {:?}", self.node.id(), prev_descriptor.sequence_number(),&desc_digest,prev_descriptor.get_digest());
@@ -1147,6 +1148,7 @@ where
     fn handle_state_received_from_app<V>(
         &mut self,
         view: V,
+        seq_no : SeqNo,
         descriptor: S::StateDescriptor,
         state: Vec<S::StatePart>,
     ) -> Result<()>
@@ -1154,7 +1156,10 @@ where
         V: NetworkView,
     {
         println!("received state from app, {:?}", descriptor.get_digest());
+        self.checkpoint.seqno = seq_no;
+
         if Some(&descriptor) != self.checkpoint.descriptor() {
+
             self.checkpoint.update(state);
     
             self.checkpoint.update_descriptor(descriptor);
