@@ -3,40 +3,31 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier};
-use std::time::Duration;
 use std::sync::atomic::Ordering::Relaxed;
 
 use atlas_client::concurrent_client::ConcurrentClient;
 use atlas_common::peer_addr::PeerAddr;
-use chrono::offset::Utc;
-use futures_timer::Delay;
+
 use intmap::IntMap;
 use nolock::queues::mpsc::jiffy::{async_queue, AsyncSender};
-use rand_core::{OsRng, RngCore};
-use semaphores::RawSemaphore;
 
 use atlas_client::client::ordered_client::Ordered;
-use atlas_client::client::Client;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
-use atlas_common::{async_runtime as rt, channel, init, prng, InitConfig};
-use febft_pbft_consensus::bft::PBFT;
+use atlas_common::{async_runtime as rt, channel, init, InitConfig};
 use log::LevelFilter;
-use log4rs::append::console::ConsoleAppender;
 use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
-use log4rs::append::rolling_file::policy::compound::trigger::size::SizeTrigger;
 use log4rs::append::rolling_file::policy::compound::trigger::Trigger;
 use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
 use log4rs::append::rolling_file::{LogFile, RollingFileAppender};
 use log4rs::append::Append;
 use log4rs::config::{Appender, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
-use log4rs::filter::threshold::ThresholdFilter;
 use log4rs::Config;
 
 use crate::common::*;
-use crate::serialize::{Action, KvData};
+use crate::serialize::Action;
 
 #[derive(Debug)]
 pub struct InitTrigger {
@@ -489,7 +480,7 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
     println!("run client");
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     
-    for u in 0..10000 {
+    for u in 0..400 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = { Action::Set(kv.clone(), kv.clone()) };
 
@@ -500,18 +491,7 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
         }
     }
 
-    for u in 0..10000 {
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = { Action::Get(kv.clone()) };
-
-        println!("{:?} // Sending req {:?}...", id, request);
-
-        if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
-            println!("state: {:?}", reply);
-        }
-    }
-
-    for u in 0..10000 {
+    for u in 0..400 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = { Action::Remove(kv.clone()) };
 
@@ -521,4 +501,7 @@ fn run_client(client: SMRClient, _q: Arc<AsyncSender<String>>) {
             println!("state: {:?}", reply);
         }
     }
+
+
+   
 }

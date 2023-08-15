@@ -7,6 +7,7 @@ use atlas_execution::state::divisible_state::DivisibleState;
 use chrono::DateTime;
 use chrono::offset::Utc;
 use atlas_common::error::*;
+use atlas_common::ordering::SeqNo;
 use atlas_common::node_id::NodeId;
 use atlas_execution::app::{Application, BatchReplies, Reply, Request, UpdateBatch};
 use atlas_metrics::benchmarks::{BenchmarkHelperStore, Measurements};
@@ -54,7 +55,6 @@ fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, State
 
 
         let reply_inner = ivec.map(|x| String::from_utf8(x.to_vec()).unwrap());
-        println!("request {:?} reply {:?}",request, reply_inner);
 
         Arc::new(reply_inner)
     }
@@ -90,6 +90,4 @@ fn update_batch(
 
         reply_batch
     }
-
-
 }

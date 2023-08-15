@@ -453,6 +453,7 @@ where
                     );
 
                     self.request_state_descriptor(view);
+                    return Ok(STResult::StateTransferRunning)
                 } else {
                     debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_seq, seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
@@ -484,9 +485,35 @@ where
                               self.checkpoint.get_req_parts()
                           },
                       }; */
-  
+
                       self.received_state_descriptors.clear();
-  
+
+                      if self.checkpoint.req_parts.is_empty() {
+                        let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
+                            if self.checkpoint.parts.len() != descriptor.parts().len() {
+                                panic!("Checkpoint parts do not match descriptor {:?} {:?}", self.checkpoint.parts.len(), descriptor.parts().len());
+                            }
+        
+                            descriptor.parts().chunks((descriptor.parts().len()/6).max(1)).collect::<Vec<_>>()
+                        } else {
+                            panic!("No Descriptor after state transfer??");
+                        };
+        
+                        //for state_desc in descriptors {
+                        let st_frag = self.checkpoint.get_parts(self.checkpoint.descriptor().unwrap().parts())?;
+                        let parts: Vec<<S as DivisibleState>::StatePart> = st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
+        
+                        self.install_channel
+                            .send(InstallStateMessage::StatePart(parts))
+                            .unwrap();
+                      //}
+                        self.checkpoint.seqno = self.largest_cid;
+                        
+                        self.install_channel.send(InstallStateMessage::Done).unwrap();
+        
+                        return Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()));
+                      }
+
                       self.request_latest_state_parts(view)?;
                 }
             }
@@ -1160,8 +1187,7 @@ where
             self.checkpoint.seqno = seq_no;
         }
 
-        if Some(&descriptor) != self.checkpoint.descriptor() {
-            println!("installing parts");
+          println!("installing parts");
             self.checkpoint.update(state);
     
             self.checkpoint.update_descriptor(descriptor);
@@ -1173,7 +1199,6 @@ where
                 )
                 .wrapped(ErrorKind::Cst);
             }
-        }
 
         Ok(())
     }
