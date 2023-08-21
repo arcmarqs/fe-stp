@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
+use atlas_common::collections::HashMap;
 use atlas_common::error::*;
 use chrono::offset::Utc;
 use intmap::IntMap;
@@ -382,10 +383,16 @@ fn run_client(mut client: SMRClient) {
     println!("run client");
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     
-    for u in 0..400 {
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = { Action::Set(kv.clone(), kv.clone()) };
 
+    for u in 0..400 {
+
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+
+        let mut map: HashMap<String,Vec<u8>> = HashMap::default();
+
+        map.insert(id.0.to_string(),kv.as_bytes().to_vec());
+
+        let request = Action::Insert(kv, map);
         println!("{:?} // Sending req {:?}...", id.0, request);
 
         if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
@@ -395,7 +402,7 @@ fn run_client(mut client: SMRClient) {
 
     for u in 0..400 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = { Action::Remove(kv.clone()) };
+        let request = {Action::Read(kv)};
 
         println!("{:?} // Sending req {:?}...", id.0, request);
 
@@ -403,5 +410,6 @@ fn run_client(mut client: SMRClient) {
             println!("state: {:?}", reply);
         }
     }
+
 
 }

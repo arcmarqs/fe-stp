@@ -2,6 +2,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
 use atlas_common::async_runtime::spawn;
+use atlas_common::collections::HashMap;
 use atlas_divisible_state::state_orchestrator::{StateOrchestrator, self, monitor_changes};
 use atlas_execution::state::divisible_state::DivisibleState;
 use chrono::DateTime;
@@ -20,7 +21,7 @@ use crate::serialize::KvData;
 pub struct KVApp;
 
 impl Application<StateOrchestrator> for KVApp {
-   type AppData = KvData;
+    type AppData = KvData;
 
 fn initial_state() -> Result<StateOrchestrator> {
     // create the state
@@ -45,16 +46,44 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
         todo!()
     }
 
-fn update(&mut self, state: &mut StateOrchestrator, request: Request<Self, StateOrchestrator>) -> Reply<Self, StateOrchestrator> {
+    fn update(
+        &mut self,
+        state: &mut StateOrchestrator,
+        request: Request<Self, StateOrchestrator>,
+    ) -> Reply<Self, StateOrchestrator> {
+        let reply_inner = match request.as_ref() {
+            serialize::Action::Read(key) => {
+                let ret = state.db.get(key).expect("Invalid element");
 
-       let ivec =  match request.as_ref() {
-        serialize::Action::Get(k) => state.db.get(k),
-        serialize::Action::Set(k, v) => state.db.insert(k, v),
-        serialize::Action::Remove(k) => state.db.remove(k),
-    }.unwrap();
+                match ret {
+                    Some(vec) => {
+                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
 
+                        serialize::Reply::Single(map)
+                    },
+                    None => serialize::Reply::None,
+                }
 
-        let reply_inner = ivec.map(|x| String::from_utf8(x.to_vec()).unwrap());
+            }
+            serialize::Action::Insert(key, value) => {
+                let serialized_map = bincode::serialize(value).expect("failed to serialize");
+                state.db.insert(key, serialized_map);
+
+                serialize::Reply::None
+            }
+            serialize::Action::Remove(key) => { 
+                let ret = state.db.remove(key).expect("Invalid Result");
+                
+                match ret {
+                    Some(vec) => {
+                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
+
+                        serialize::Reply::Single(map)
+                    },
+                    None => serialize::Reply::None,
+                }
+            }
+        };
 
         Arc::new(reply_inner)
     }

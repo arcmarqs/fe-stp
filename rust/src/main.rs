@@ -1,10 +1,9 @@
-mod serialize;
-
 mod local;
 mod common;
 mod stp;
 mod exec;
 mod cop;
+mod serialize;
 
 //#[cfg(not(target_env = "msvc"))]
 //use tikv_jemallocator::Jemalloc;

@@ -3,6 +3,7 @@ use std::sync::{Weak, Arc};
 use std::time::Duration;
 use std::default::Default;
 use std::io::{Read, Write};
+use atlas_common::collections::HashMap;
 use serde::{Serialize, Deserialize, Deserializer};
 
 use konst::{
@@ -20,19 +21,28 @@ use atlas_common::error::*;
 use atlas_execution::serialize::ApplicationData;
 use atlas_divisible_state::*;
 
+
 pub struct KvData;
 
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Action {
-    Get(String),
-    Set(String, String),
-    Remove(String),
+    Read(String),
+    Insert(String, HashMap<String,Vec<u8>>),
+    Remove(String)
 }
+
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub enum Reply {
+    None,
+    Single(HashMap<String,Vec<u8>>),
+    Multiple(Vec<HashMap<String,Vec<u8>>>),
+}
+
 
 impl ApplicationData for KvData{
     type Request = Arc<Action>;
-    type Reply = Arc<Option<String>>;
+    type Reply = Arc<Reply>;
 
     fn serialize_request<W>(w: W, request: &Self::Request) -> Result<()> where W: Write {
         let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
@@ -78,7 +88,7 @@ impl ApplicationData for KvData{
             .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
 
         let _data = request_msg.get_data().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
-        let rep: Option<String> = bincode::deserialize(_data).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
+        let rep: Reply = bincode::deserialize(_data).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read reply message")?;
         Ok(Arc::new(rep))
     }
 }
