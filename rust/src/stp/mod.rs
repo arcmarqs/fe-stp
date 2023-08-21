@@ -1182,12 +1182,9 @@ where
         V: NetworkView,
     {
         println!("received state from app, {:?} my seqno {:?} seqno {:?}", descriptor.get_digest(), self.checkpoint.get_seqno(), seq_no);
-
         if self.checkpoint.get_seqno() < seq_no {
             self.checkpoint.seqno = seq_no;
         }
-
-          println!("installing parts");
             self.checkpoint.update(state);
     
             self.checkpoint.update_descriptor(descriptor);
