@@ -1,11 +1,13 @@
+use std::clone;
+use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::{Weak, Arc};
 use std::time::Duration;
 use std::default::Default;
 use std::io::{Read, Write};
 use atlas_common::collections::HashMap;
+use atlas_execution::state::monolithic_state::MonolithicState;
 use serde::{Serialize, Deserialize, Deserializer};
-
 use konst::{
     primitive::{
         parse_usize,
@@ -19,7 +21,6 @@ use serde::ser::SerializeStruct;
 
 use atlas_common::error::*;
 use atlas_execution::serialize::ApplicationData;
-use atlas_divisible_state::*;
 
 
 pub struct KvData;
@@ -39,6 +40,31 @@ pub enum Reply {
     Multiple(Vec<HashMap<String,Vec<u8>>>),
 }
 
+#[derive(Clone,Serialize,Deserialize)]
+pub struct State {
+    pub db: BTreeMap<String,Vec<u8>>,
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self { db: BTreeMap::new() }
+    }
+}
+
+
+
+impl MonolithicState for State {
+    fn serialize_state<W>(mut w: W, request: &Self) -> Result<()> where W: Write {
+        let buf = bincode::serialize(request).expect("failed to serialize");
+        w.write_all(buf.as_ref()).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to serialize state")
+    }
+
+    fn deserialize_state<R>(r: R) -> Result<Self> where R: Read, Self: Sized {
+        let buf = r.bytes().map(|b| b.expect("failed to read byte")).collect::<Vec<_>>();
+        let state: BTreeMap<String, Vec<u8>> = bincode::deserialize(&buf).expect("Failed to deserialize");
+        Ok(State {db: state})
+    }
+}
 
 impl ApplicationData for KvData{
     type Request = Arc<Action>;

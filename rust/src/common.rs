@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use atlas_common::peer_addr::PeerAddr;
 use atlas_core::smr::networking::NodeWrap;
-use atlas_divisible_state::SerializedState;
-use atlas_divisible_state::state_orchestrator::StateOrchestrator;
-use atlas_execution::state::divisible_state::StatePart;
+use atlas_replica::server::monolithic_server::MonReplica;
 use intmap::IntMap;
 use konst::primitive::{parse_u128, parse_u32, parse_usize};
 use konst::unwrap_ctx;
@@ -39,19 +37,19 @@ use atlas_log_transfer::config::LogTransferConfig;
 use atlas_log_transfer::messages::serialize::LTMsg;
 use atlas_metrics::benchmarks::CommStats;
 use atlas_metrics::InfluxDBArgs;
-use atlas_persistent_log::{PersistentLog, DivisibleStatePersistentLog};
+use atlas_persistent_log::{PersistentLog, DivisibleStatePersistentLog, MonStatePersistentLog};
 use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use febft_pbft_consensus::bft::PBFTOrderProtocol;
 use febft_pbft_consensus::bft::config::{PBFTConfig, ProposerConfig};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
-use atlas_replica::config::{DivisibleStateReplicaConfig, ReplicaConfig};
+use atlas_replica::config::{ ReplicaConfig, MonolithicStateReplicaConfig};
 use atlas_replica::server::Replica;
-use atlas_replica::server::divisible_state_server::{self, DivStReplica};
+use febft_state_transfer::CollabStateTransfer;
+use febft_state_transfer::config::StateTransferConfig;
+use febft_state_transfer::message::serialize::CSTMsg;
 
 use crate::exec::KVApp;
-use crate::serialize::KvData;
-use crate::stp::message::serialize::STMsg;
-use crate::stp::{self, BtStateTransfer, StateTransferConfig};
+use crate::serialize::{KvData, State};
 
 #[macro_export]
 macro_rules! addr {
@@ -259,7 +257,7 @@ async fn node_config(
 
 pub type ReconfigurationMessage = ReconfData;
 pub type OrderProtocolMessage = PBFTConsensus<KvData>;
-pub type StateTransferMessage = STMsg<StateOrchestrator>;
+pub type StateTransferMessage = CSTMsg<State>;
 pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolMessage>;
 
 /// Set up the networking layer with the data handles we have
@@ -268,15 +266,15 @@ pub type ReplicaNetworking = NodeWrap<Network<ServiceMsg<KvData, OrderProtocolMe
 pub type ClientNetworking = Network<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles
-pub type Logging = DivisibleStatePersistentLog<StateOrchestrator, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
+pub type Logging = MonStatePersistentLog<State, KvData, OrderProtocolMessage, OrderProtocolMessage, StateTransferMessage>;
 
 /// Set up the protocols with the types that have been built up to here
 pub type ReconfProtocol = ReconfigurableNodeProtocol;
 pub type OrderProtocol = PBFTOrderProtocol<KvData, ReplicaNetworking, Logging>;
 pub type LogTransferProtocol = CollabLogTransfer<KvData, OrderProtocol, ReplicaNetworking, Logging>;
-pub type StateTransferProtocol = BtStateTransfer<StateOrchestrator, ReplicaNetworking, Logging>;
+pub type StateTransferProtocol = CollabStateTransfer<State, ReplicaNetworking, Logging>;
 
-pub type SMRReplica = DivStReplica<ReconfProtocol,StateOrchestrator, KVApp, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
+pub type SMRReplica = MonReplica<ReconfProtocol,State, KVApp, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging>;
 pub type SMRClient = Client<ReconfProtocol, KvData, ClientNetworking>;
 
 pub fn setup_reconf(id: NodeId, sk: KeyPair, addrs: IntMap<PeerAddr>, pk: IntMap<PublicKey>, node_type: NodeType) -> Result<ReconfigurableNetworkConfig> {
@@ -380,7 +378,7 @@ pub async fn setup_replica(
 
     let service = KVApp;
 
-    let conf = ReplicaConfig::<ReconfProtocol, StateOrchestrator, KvData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
+    let conf = ReplicaConfig::<ReconfProtocol, State, KvData, OrderProtocol, StateTransferProtocol, LogTransferProtocol, ReplicaNetworking, Logging> {
         node,
         view: SeqNo::ZERO,
         next_consensus_seq: SeqNo::ZERO,
@@ -395,13 +393,13 @@ pub async fn setup_replica(
         reconfig_node: reconf_config,
     };
 
-    let div_conf = DivisibleStateReplicaConfig {
+    let div_conf = MonolithicStateReplicaConfig {
         service,
         replica_config: conf,
         st_config,
     };
 
-    DivStReplica::bootstrap(div_conf).await
+    MonReplica::bootstrap(div_conf).await
 }
 
 

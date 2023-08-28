@@ -1,6 +1,5 @@
 mod local;
 mod common;
-mod stp;
 mod exec;
 mod cop;
 mod serialize;

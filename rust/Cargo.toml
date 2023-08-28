@@ -34,13 +34,13 @@ atlas-common = { path = "../../Atlas/atlas-common" }
 atlas-communication = { path = "../../Atlas/atlas-communication" }
 atlas-execution = { path = "../../Atlas/atlas-execution", features = ["serialize_serde"] }
 atlas-core = { path = "../../Atlas/atlas-core" }
-atlas-divisible-state = { path = "../../Atlas/atlas-divisible-state"}
 atlas-replica = { path = "../../Atlas/atlas-replica" }
 atlas-client = { path = "../../Atlas/atlas-client" }
 atlas-metrics = { path = "../../Atlas/atlas-metrics" }
 atlas-persistent-log = { path = "../../Atlas/atlas-persistent-log" }
 atlas-reconfiguration = { path = "../../Atlas/atlas-reconfiguration" }
 atlas-log-transfer = { path = "../../Atlas/atlas-log-transfer", features = ["serialize_serde"] }
+febft-state-transfer = { path = "../../febft/febft-state-transfer", features = ["serialize_serde"] }
 
 [dependencies.febft-pbft-consensus]
 path = "../../febft/febft-pbft-consensus"

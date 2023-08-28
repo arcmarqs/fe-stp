@@ -139,8 +139,7 @@ pub fn main() {
         with_metrics(atlas_communication::metric::metrics()),
         with_metrics(atlas_replica::metric::metrics()),
         with_metrics(atlas_log_transfer::metrics::metrics()),
-        with_metrics(atlas_divisible_state::metrics::metrics()),
-        with_metrics(super::stp::metrics::metrics()),
+        with_metrics(febft_state_transfer::metrics::metrics()),
         with_metric_level(MetricLevel::Trace)],
    influx_db_config(node_id));
 
