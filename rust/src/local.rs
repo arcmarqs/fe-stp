@@ -18,6 +18,7 @@ use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::{async_runtime as rt, channel, init, InitConfig};
+use atlas_metrics::{MetricLevel, with_metric_level, with_metrics};
 use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
 use konst::primitive::parse_usize;
@@ -152,6 +153,16 @@ pub fn main() {
             let _guard = unsafe { init(conf).unwrap() };
             let node_id = NodeId::from(id);
 
+             atlas_metrics::initialize_metrics(vec![with_metrics(febft_pbft_consensus::bft::metric::metrics()),
+            with_metrics(atlas_core::metric::metrics()),
+            with_metrics(atlas_communication::metric::metrics()),
+            with_metrics(atlas_replica::metric::metrics()),
+            with_metrics(atlas_log_transfer::metrics::metrics()),
+            with_metrics(atlas_divisible_state::metrics::metrics()),
+            with_metrics(super::stp::metrics::metrics()),
+            with_metric_level(MetricLevel::Info)],
+       influx_db_config(node_id));
+
             if !single_server {
             main_();
             } else {
@@ -169,6 +180,12 @@ pub fn main() {
         let _guard = unsafe { init(conf).unwrap() };
 
         let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
+
+      
+        atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
+        with_metrics(atlas_client::metric::metrics()),
+        with_metric_level(MetricLevel::Info)],
+   influx_db_config(NodeId::from(first_id)));   
 
         client_async_main();
     }
@@ -451,7 +468,7 @@ fn client_async_main() {
     for client in clients {
         let id = client.id();
 
-        generate_log(id.0);
+       // generate_log(id.0);
 
         let h = std::thread::Builder::new()
             .name(format!("Client {:?}", client.id()))

@@ -41,15 +41,15 @@ use atlas_metrics::benchmarks::CommStats;
 use atlas_metrics::InfluxDBArgs;
 use atlas_persistent_log::{PersistentLog, DivisibleStatePersistentLog};
 use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
-use febft_pbft_consensus::bft::{PBFTOrderProtocol};
+use febft_pbft_consensus::bft::PBFTOrderProtocol;
 use febft_pbft_consensus::bft::config::{PBFTConfig, ProposerConfig};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use atlas_replica::config::{DivisibleStateReplicaConfig, ReplicaConfig};
-use atlas_replica::server::{Replica};
+use atlas_replica::server::Replica;
 use atlas_replica::server::divisible_state_server::{self, DivStReplica};
 
 use crate::exec::KVApp;
-use crate::serialize::{KvData};
+use crate::serialize::KvData;
 use crate::stp::message::serialize::STMsg;
 use crate::stp::{self, BtStateTransfer, StateTransferConfig};
 
@@ -173,10 +173,14 @@ fn parse_entry(re: &Regex, line: &str) -> Option<ConfigEntry> {
 
 /// Get the configuration for influx DB
 pub fn influx_db_config(id: NodeId) -> InfluxDBArgs {
-    let ip = std::env::var("INFLUX_IP").expect("INFLUX_IP not set");
-    let db_name = std::env::var("INFLUX_DB_NAME").expect("INFLUX_DB_NAME not set");
-    let user = std::env::var("INFLUX_USER").expect("INFLUX_USER not set");
-    let password = std::env::var("INFLUX_PASSWORD").expect("INFLUX_PASSWORD not set");
+   // let ip = std::env::var("INFLUX_IP").expect("INFLUX_IP not set");
+   // let db_name = std::env::var("INFLUX_DB_NAME").expect("INFLUX_DB_NAME not set");
+   // let user = std::env::var("INFLUX_USER").expect("INFLUX_USER not set");
+   // let password = std::env::var("INFLUX_PASSWORD").expect("INFLUX_PASSWORD not set");
+   let ip = "http://localhost:8086".into();
+   let db_name = "atlas".into();
+   let user = "admin".into();
+   let password = "tese2023".into();
 
     let extra = std::env::var("INFLUX_EXTRA_TEST").unwrap_or("".to_string());
 
@@ -191,6 +195,7 @@ pub fn influx_db_config(id: NodeId) -> InfluxDBArgs {
         extra,
     }
 }
+
 const BOOSTRAP_NODES: [u32; 4] = [0, 1, 2, 3];
 
 async fn node_config(

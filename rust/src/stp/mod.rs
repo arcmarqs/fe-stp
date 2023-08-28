@@ -6,26 +6,28 @@ use std::fs::{self, OpenOptions};
 use std::io::{prelude::*, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atlas_common::channel::ChannelSyncTx;
 use atlas_core::ordering_protocol::ExecutionResult;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
-use atlas_divisible_state::SerializedTree;
 use atlas_divisible_state::state_tree::{LeafNode, StateTree};
-use atlas_execution::state::divisible_state::{DivisibleState, DivisibleStateDescriptor, InstallStateMessage,
-    PartDescription, StatePart, PartId,
+use atlas_divisible_state::SerializedTree;
+use atlas_execution::state::divisible_state::{
+    DivisibleState, DivisibleStateDescriptor, InstallStateMessage, PartDescription, PartId,
+    StatePart,
 };
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
-use atlas_common::collections::{HashMap, self};
+
+use atlas_common::collections::{self, HashMap};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{Header,StoredMessage};
+use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::StateTransfer;
 use atlas_core::persistent_log::{
     DivisibleStateLog, OperationMode, PersistableStateTransferProtocol,
@@ -34,13 +36,15 @@ use atlas_core::serialize::NetworkView;
 use atlas_core::state_transfer::divisible_state::*;
 use atlas_core::state_transfer::{CstM, STResult, STTimeoutResult, StateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-
+use atlas_metrics::metrics::{metric_duration, metric_duration_start, metric_duration_end};
+use crate::stp::metrics::{CHECKPOINT_UPDATE_TIME_ID,PROCESS_REQ_STATE_TIME_ID,STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,STATE_TRANSFER_TIME_ID};
 use crate::stp::message::MessageKind;
 
 use self::message::serialize::STMsg;
 use self::message::StMessage;
 
 pub mod message;
+pub mod metrics;
 
 pub struct StateTransferConfig {
     pub timeout_duration: Duration,
@@ -52,6 +56,7 @@ struct PersistentCheckpoint<S: DivisibleState> {
     path: String,
     seqno: SeqNo,
     descriptor: Option<S::StateDescriptor>,
+    targets: Vec<NodeId>,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
     parts: HashMap<u64, PartRef>,
@@ -61,7 +66,14 @@ struct PersistentCheckpoint<S: DivisibleState> {
 
 impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
     fn default() -> Self {
-        Self {seqno: SeqNo::ZERO,descriptor: None,path: Default::default(), parts: Default::default(), req_parts: Default::default() }
+        Self {
+            seqno: SeqNo::ZERO,
+            descriptor: None,
+            path: Default::default(),
+            parts: Default::default(),
+            req_parts: Default::default(),
+            targets: vec![],
+        }
     }
 }
 
@@ -75,25 +87,26 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             req_parts: Vec::default(),
             seqno: SeqNo::ZERO,
             descriptor: None,
+            targets: vec![],
         }
     }
 
     pub fn descriptor(&self) -> Option<&S::StateDescriptor> {
-       self.descriptor.as_ref()
+        self.descriptor.as_ref()
     }
 
     pub fn get_digest(&self) -> Option<&Digest> {
-       match &self.descriptor {
-        Some(d) => Some(d.get_digest()),
-        None => None,
+        match &self.descriptor {
+            Some(d) => Some(d.get_digest()),
+            None => None,
+        }
     }
-    }
-    
+
     pub fn get_seqno(&self) -> SeqNo {
         self.seqno
     }
 
-    pub fn part_description(&self,pid: u64) -> Option<&S::PartDescription> {
+    pub fn part_description(&self, pid: u64) -> Option<&S::PartDescription> {
         match self.descriptor() {
             Some(descriptor) => {
                 if let Some(part) = descriptor.parts().iter().find(|x| x.id() == &pid) {
@@ -101,7 +114,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                 } else {
                     None
                 }
-            },
+            }
             None => None,
         }
     }
@@ -130,21 +143,26 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
                     if local_part.hash() == part.content_description() {
                         // We've confirmed that this part is valid so we don't need to request it
-                        existing_parts.insert(local_part.id(),(part_path, buf.len() as u64));
-                        continue
+                        existing_parts.insert(local_part.id(), (part_path, buf.len() as u64));
+                        continue;
                     }
                 }
             }
             parts_to_req.push(part.clone());
         }
-        println!("parts present {:?}, parts needed {:?}, total {:?}", existing_parts.len(),parts_to_req.len(),self.descriptor().unwrap().parts().len());
-            self.parts = existing_parts;
-            parts_to_req
+        info!(
+            "parts present {:?}, parts needed {:?}, total {:?}",
+            existing_parts.len(),
+            parts_to_req.len(),
+            self.descriptor().unwrap().parts().len()
+        );
+        self.parts = existing_parts;
+        parts_to_req
     }
 
-    pub fn update_descriptor(&mut self,descriptor: S::StateDescriptor) {
+    pub fn update_descriptor(&mut self, descriptor: S::StateDescriptor) {
         self.descriptor = Some(descriptor);
-    }    
+    }
 
     pub fn update(&mut self, new_parts: Vec<S::StatePart>) {
         for part in new_parts {
@@ -161,7 +179,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                     self.parts.insert(part.id(), (part_path, buf.len() as u64));
                 }
                 Err(e) => {
-                    panic!("Error opening file {:?}",e);
+                    panic!("Error opening file {:?}", e);
                 }
             }
         }
@@ -218,7 +236,7 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
                 write!(f, "Receiving state descriptor {}", i)
             }
             ProtoPhase::ReceivingState(i) => {
-                write!(f, "Receiving state phase responses {}",i)
+                write!(f, "Receiving state phase responses {}", i)
             }
         }
     }
@@ -451,9 +469,9 @@ where
                         self.node.id(),
                         seq
                     );
-
+                    metric_duration_start(STATE_TRANSFER_TIME_ID);
                     self.request_state_descriptor(view);
-                    return Ok(STResult::StateTransferRunning)
+                    return Ok(STResult::StateTransferRunning);
                 } else {
                     debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_seq, seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
@@ -475,74 +493,21 @@ where
                     return Ok(STResult::StateTransferNotNeeded(
                         self.checkpoint.get_seqno(),
                     ));
-                   
                 } else {
                     self.checkpoint.update_descriptor(descriptor);
                     self.checkpoint.req_parts = self.checkpoint.get_req_parts();
-                    /*   self.checkpoint.req_parts = match &self.checkpoint.descriptor {
-                          Some(descriptor) => descriptor.compare_descriptors(descriptor),
-                          None => {
-                              self.checkpoint.get_req_parts()
-                          },
-                      }; */
+            
+                    self.received_state_descriptors.clear();
 
-                      self.received_state_descriptors.clear();
+                    if self.checkpoint.req_parts.is_empty() {
+                        return self.install_state();
+                    }
 
-                      if self.checkpoint.req_parts.is_empty() {
-                        let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
-                            if self.checkpoint.parts.len() != descriptor.parts().len() {
-                                panic!("Checkpoint parts do not match descriptor {:?} {:?}", self.checkpoint.parts.len(), descriptor.parts().len());
-                            }
-        
-                            descriptor.parts().chunks((descriptor.parts().len()/6).max(1)).collect::<Vec<_>>()
-                        } else {
-                            panic!("No Descriptor after state transfer??");
-                        };
-        
-                        //for state_desc in descriptors {
-                        let st_frag = self.checkpoint.get_parts(self.checkpoint.descriptor().unwrap().parts())?;
-                        let parts: Vec<<S as DivisibleState>::StatePart> = st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
-        
-                        self.install_channel
-                            .send(InstallStateMessage::StatePart(parts))
-                            .unwrap();
-                      //}
-                        self.checkpoint.seqno = self.largest_cid;
-                        
-                        self.install_channel.send(InstallStateMessage::Done).unwrap();
-        
-                        return Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()));
-                      }
-
-                      self.request_latest_state_parts(view)?;
+                    self.request_latest_state_parts(view)?;
                 }
             }
             StStatus::StateComplete(seq) => {
-                println!("StateTransfer Complete, installing state");  
-                
-                let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
-                    if self.checkpoint.parts.len() != descriptor.parts().len() {
-                        panic!("Checkpoint parts do not match descriptor {:?} {:?}", self.checkpoint.parts.len(), descriptor.parts().len());
-                    }
-
-                    descriptor.parts().chunks((descriptor.parts().len()/6).max(1)).collect::<Vec<_>>()
-                } else {
-                    panic!("No Descriptor after state transfer??");
-                };
-
-                for state_desc in descriptors {
-                let st_frag = self.checkpoint.get_parts(&state_desc.to_vec())?;
-                let parts: Vec<<S as DivisibleState>::StatePart> = st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
-
-                self.install_channel
-                    .send(InstallStateMessage::StatePart(parts))
-                    .unwrap();
-              }
-                self.checkpoint.seqno = self.largest_cid;
-                
-                self.install_channel.send(InstallStateMessage::Done).unwrap();
-
-                return Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()));
+                return self.install_state();
             }
         }
 
@@ -553,7 +518,9 @@ where
     where
         V: NetworkView,
     {
-        if self.checkpoint.get_seqno() < seq || (seq != SeqNo::ZERO && self.checkpoint.descriptor.is_none()){
+        if self.checkpoint.get_seqno() < seq
+            || (seq != SeqNo::ZERO && self.checkpoint.descriptor.is_none())
+        {
             Ok(ExecutionResult::BeginCheckpoint)
         } else {
             Ok(ExecutionResult::Nil)
@@ -676,18 +643,15 @@ where
     }
 
     fn process_request_seq(&mut self, header: Header, message: StMessage<S>) {
-
         let seq = match &self.checkpoint.descriptor {
-            Some(descriptor) => Some((
-                self.checkpoint.get_seqno(),
-                descriptor.get_digest().clone(),
-            )),
+            Some(descriptor) => {
+                Some((self.checkpoint.get_seqno(), descriptor.get_digest().clone()))
+            }
             None => {
                 // We have received no state updates from the app so we have no descriptor
                 Some((SeqNo::ZERO, Digest::blank()))
             }
         };
-        
 
         let kind = MessageKind::ReplyLatestSeq(seq.clone());
 
@@ -763,6 +727,7 @@ where
     }
 
     fn process_request_state(&mut self, header: Header, message: StMessage<S>) {
+        let start = Instant::now();
         match &mut self.phase {
             ProtoPhase::Init => {}
             ProtoPhase::WaitingCheckpoint(waiting) => {
@@ -801,12 +766,16 @@ where
         let reply = StMessage::new(
             message.sequence_number(),
             MessageKind::ReplyState(RecoveryState {
-                seq:self.checkpoint.get_seqno(),
+                seq: self.checkpoint.get_seqno(),
                 st_frag,
             }),
         );
 
         self.node.send(reply, header.from(), true).unwrap();
+
+        println!("process req state finished {:?}", start.elapsed());
+
+        metric_duration(PROCESS_REQ_STATE_TIME_ID, start.elapsed());
     }
 
     pub fn process_request_descriptor(&mut self, header: Header, message: StMessage<S>) {
@@ -839,7 +808,7 @@ where
 
         let reply = StMessage::new(
             message.sequence_number(),
-            MessageKind::ReplyStateDescriptor(Some((self.checkpoint.get_seqno(),state.clone()))),
+            MessageKind::ReplyStateDescriptor(Some((self.checkpoint.get_seqno(), state.clone()))),
         );
 
         self.node.send(reply, header.from(), true).unwrap();
@@ -942,6 +911,8 @@ where
                     self.phase = ProtoPhase::Init;
 
                     self.largest_cid = largest.0;
+                    self.checkpoint.targets = voters.to_owned();
+
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
@@ -980,7 +951,7 @@ where
 
                 let i = i + 1;
 
-                if i == view.quorum() {
+                if i >= view.quorum() {
                     self.phase = ProtoPhase::Init;
 
                     if let Some(final_descriptor) =
@@ -1019,7 +990,8 @@ where
                     if self
                         .checkpoint
                         .req_parts
-                        .contains(received_part.descriptor()) && received_part.descriptor().content_description() == part_hash
+                        .contains(received_part.descriptor())
+                        && received_part.descriptor().content_description() == part_hash
                     {
                         accepted_descriptor.push(received_part.descriptor().clone());
                         accepted_parts.push((**received_part).clone())
@@ -1047,7 +1019,6 @@ where
 
                 // reset timeout, since req was successful
                 if self.checkpoint.req_parts.is_empty() {
-
                     self.phase = ProtoPhase::Init;
 
                     StStatus::StateComplete(state.seq)
@@ -1092,7 +1063,6 @@ where
     where
         V: NetworkView,
     {
-
         let cst_seq = self.curr_seq;
 
         println!(
@@ -1109,21 +1079,17 @@ where
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
 
-        let targets = view
-            .quorum_members()
-            .clone()
-            .into_iter()
-            .filter(|id| *id != self.node.id());
+        let targets = &self.checkpoint.targets;
 
         let parts_map = self
             .checkpoint
             .req_parts
-            .chunks((self.checkpoint.req_parts.len() / (view.n() - 1)).max(1));
+            .chunks((self.checkpoint.req_parts.len() / targets.len()).max(1));
 
-        for (n, p) in targets.zip(parts_map) {
+        for (n, p) in targets.iter().zip(parts_map) {
             let message = StMessage::new(cst_seq, MessageKind::ReqState(p.to_vec()));
 
-            self.node.send(message, n, false)?;
+            self.node.send(message, *n, false)?;
         }
 
         Ok(())
@@ -1133,6 +1099,56 @@ where
         self.curr_seq = self.curr_seq.next();
 
         self.curr_seq
+    }
+
+    fn install_state(&mut self) -> Result<STResult>
+    {
+        let start_install = Instant::now();
+
+        let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
+            info!("{:?} // Starting state instalatation, descriptor is {:?}", self.node.id(),descriptor);
+            if self.checkpoint.parts.len() != descriptor.parts().len() {
+                panic!(
+                    "Checkpoint parts do not match descriptor {:?} {:?}",
+                    self.checkpoint.parts.len(),
+                    descriptor.parts().len()
+                );
+            }
+
+            descriptor
+                .parts()
+                .chunks((descriptor.parts().len() / 6).max(1))
+                .collect::<Vec<_>>()
+        } else {
+            panic!("No Descriptor after state transfer??");
+        };
+
+        for state_desc in descriptors {
+            info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
+            let st_frag = self.checkpoint.get_parts(&state_desc.to_vec())?;
+            let parts: Vec<<S as DivisibleState>::StatePart> =
+                st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
+
+            self.install_channel
+                .send(InstallStateMessage::StatePart(parts))
+                .unwrap();
+        }
+
+        self.checkpoint.seqno = self.largest_cid;
+
+        self.install_channel
+            .send(InstallStateMessage::Done)
+            .unwrap();
+
+        println!("state transfer finished {:?}", start_install.elapsed());
+
+        metric_duration(
+            STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,
+            start_install.elapsed(),
+        );
+        metric_duration_end(STATE_TRANSFER_TIME_ID);
+
+        Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()))
     }
 }
 
@@ -1174,29 +1190,39 @@ where
     fn handle_state_received_from_app<V>(
         &mut self,
         view: V,
-        seq_no : SeqNo,
+        seq_no: SeqNo,
         descriptor: S::StateDescriptor,
         state: Vec<S::StatePart>,
     ) -> Result<()>
     where
         V: NetworkView,
     {
-        println!("received state from app, {:?} my seqno {:?} seqno {:?}", descriptor.get_digest(), self.checkpoint.get_seqno(), seq_no);
+        println!(
+            "received state from app, {:?} my seqno {:?} seqno {:?}",
+            descriptor.get_digest(),
+            self.checkpoint.get_seqno(),
+            seq_no
+        );
+
+        let start = Instant::now();
         if self.checkpoint.get_seqno() < seq_no {
             self.checkpoint.seqno = seq_no;
         }
-            self.checkpoint.update(state);
-    
-            self.checkpoint.update_descriptor(descriptor);
-            
-            if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
-            } else {
-                return Err(
-                    "Process message while needing checkpoint returned something else than nil",
-                )
-                .wrapped(ErrorKind::Cst);
-            }
+        self.checkpoint.update(state);
 
+        self.checkpoint.update_descriptor(descriptor);
+
+        if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
+        } else {
+            return Err(
+                "Process message while needing checkpoint returned something else than nil",
+            )
+            .wrapped(ErrorKind::Cst);
+        }
+
+        println!("checkpoint update finished {:?}", start.elapsed());
+
+        metric_duration(CHECKPOINT_UPDATE_TIME_ID, start.elapsed());
         Ok(())
     }
 }
