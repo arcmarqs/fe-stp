@@ -27,7 +27,7 @@ impl<S: DivisibleState> Debug for StMessage<S> {
                 write!(f, "Request consensus ID")
             }
             MessageKind::ReplyLatestSeq(opt ) => {
-                write!(f, "Reply consensus seq {:?}", opt.as_ref().map(|(seq, _)| *seq).unwrap_or(SeqNo::ZERO))
+                write!(f, "Reply consensus seq {:?}", opt.as_ref().map(|(seq,digest)| *seq).unwrap_or(SeqNo::ZERO))
             }
             MessageKind::ReqState(_) => {
                 write!(f, "Request state message")
@@ -49,7 +49,7 @@ impl<S: DivisibleState> Debug for StMessage<S> {
 #[derive(Clone,Serialize, Deserialize)]
 pub enum MessageKind<S:DivisibleState> {
     RequestLatestSeq,
-    ReplyLatestSeq(Option<(SeqNo, Digest)>),
+    ReplyLatestSeq(Option<(SeqNo,Digest)>),
     RequestStateDescriptor,
     ReplyStateDescriptor(Option<(SeqNo,S::StateDescriptor)>),
     ReqState(Vec<S::PartDescription>),

@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use atlas_common::peer_addr::PeerAddr;
 use atlas_core::smr::networking::NodeWrap;
-use atlas_divisible_state::SerializedState;
 use atlas_divisible_state::state_orchestrator::StateOrchestrator;
-use atlas_execution::state::divisible_state::StatePart;
 use intmap::IntMap;
 use konst::primitive::{parse_u128, parse_u32, parse_usize};
 use konst::unwrap_ctx;
@@ -18,40 +16,38 @@ use regex::Regex;
 use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
 use rustls::server::AllowAnyAuthenticatedClient;
 use rustls_pemfile::{Item, read_one};
-use febft_pbft_consensus::bft::message::ObserveEventKind;
 use atlas_client::client;
 use atlas_client::client::Client;
 use atlas_client::client::unordered_client::UnorderedClientMode;
 use atlas_common::crypto::signature::{KeyPair, PublicKey};
-use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::ordering::SeqNo;
 use atlas_common::error::*;
 use atlas_common::node_id::{NodeId, NodeType};
 use atlas_common::threadpool;
-use atlas_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
+use atlas_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, TcpConfig, TlsConfig};
 use atlas_communication::mio_tcp::MIOTcpNode;
-use atlas_core::serialize::{ClientServiceMsg, ServiceMsg};
+use atlas_core::serialize::{ClientServiceMsg, Service};
 use atlas_reconfiguration::config::ReconfigurableNetworkConfig;
 use atlas_reconfiguration::message::{NodeTriple, ReconfData};
 use atlas_reconfiguration::network_reconfig::NetworkInfo;
-use atlas_reconfiguration::{ReconfigurableNodeProtocol, ReconfigurableNode};
+use atlas_reconfiguration::ReconfigurableNodeProtocol;
 use atlas_log_transfer::CollabLogTransfer;
 use atlas_log_transfer::config::LogTransferConfig;
 use atlas_log_transfer::messages::serialize::LTMsg;
 use atlas_metrics::benchmarks::CommStats;
 use atlas_metrics::InfluxDBArgs;
-use atlas_persistent_log::{PersistentLog, DivisibleStatePersistentLog};
+use atlas_persistent_log::DivisibleStatePersistentLog;
 use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use febft_pbft_consensus::bft::PBFTOrderProtocol;
 use febft_pbft_consensus::bft::config::{PBFTConfig, ProposerConfig};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use atlas_replica::config::{DivisibleStateReplicaConfig, ReplicaConfig};
-use atlas_replica::server::Replica;
-use atlas_replica::server::divisible_state_server::{self, DivStReplica};
+use atlas_replica::server::divisible_state_server::DivStReplica;
 
 use crate::exec::KVApp;
 use crate::serialize::KvData;
 use crate::stp::message::serialize::STMsg;
-use crate::stp::{self, BtStateTransfer, StateTransferConfig};
+use crate::stp::{BtStateTransfer, StateTransferConfig};
 
 #[macro_export]
 macro_rules! addr {
@@ -264,7 +260,7 @@ pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolM
 
 /// Set up the networking layer with the data handles we have
 pub type Network<S> = MIOTcpNode<NetworkInfo, ReconfData, S>;
-pub type ReplicaNetworking = NodeWrap<Network<ServiceMsg<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>, KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage, NetworkInfo, ReconfData>;
+pub type ReplicaNetworking = NodeWrap<Network<Service<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>, KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage, NetworkInfo, ReconfData>;
 pub type ClientNetworking = Network<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles

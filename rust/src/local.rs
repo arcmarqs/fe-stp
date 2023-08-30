@@ -501,7 +501,7 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     
 
-    for u in 0..10000 {
+    for u in 0..100000 {
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
 
