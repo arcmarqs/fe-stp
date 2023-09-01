@@ -67,13 +67,13 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
             serialize::Action::Insert(key, value) => {
                 let serialized_map = bincode::serialize(value).expect("failed to serialize");
-                state.db.insert(key, serialized_map);
+                let _ = state.db.insert(key, serialized_map);
 
                 serialize::Reply::None
             }
             serialize::Action::Remove(key) => { 
                 let ret = state.db.remove(key).expect("Invalid Result");
-                
+
                 match ret {
                     Some(vec) => {
                         let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
@@ -84,6 +84,8 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
                 }
             }
         };
+
+       // state.db.flush();
 
         Arc::new(reply_inner)
     }
@@ -110,12 +112,13 @@ fn update_batch(
         batch: UpdateBatch<Request<Self, StateOrchestrator>>,
     ) -> BatchReplies<Reply<Self, StateOrchestrator>> {
         let mut reply_batch = BatchReplies::with_capacity(batch.len());
-
+        
         for update in batch.into_inner() {
             let (peer_id, sess, opid, req) = update.into_inner();
             let reply = self.update(state, req);
             reply_batch.add(peer_id, sess, opid, reply);
         }
+
 
         reply_batch
     }
