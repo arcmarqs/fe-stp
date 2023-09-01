@@ -27,7 +27,7 @@ use atlas_common::node_id::{NodeId, NodeType};
 use atlas_common::threadpool;
 use atlas_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
 use atlas_communication::mio_tcp::MIOTcpNode;
-use atlas_core::serialize::{ClientServiceMsg, ServiceMsg};
+use atlas_core::serialize::{ClientServiceMsg, Service};
 use atlas_reconfiguration::config::ReconfigurableNetworkConfig;
 use atlas_reconfiguration::message::{NodeTriple, ReconfData};
 use atlas_reconfiguration::network_reconfig::NetworkInfo;
@@ -262,7 +262,7 @@ pub type LogTransferMessage = LTMsg<KvData, OrderProtocolMessage, OrderProtocolM
 
 /// Set up the networking layer with the data handles we have
 pub type Network<S> = MIOTcpNode<NetworkInfo, ReconfData, S>;
-pub type ReplicaNetworking = NodeWrap<Network<ServiceMsg<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>, KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage, NetworkInfo, ReconfData>;
+pub type ReplicaNetworking = NodeWrap<Network<Service<KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage>>, KvData, OrderProtocolMessage, StateTransferMessage, LogTransferMessage, NetworkInfo, ReconfData>;
 pub type ClientNetworking = Network<ClientServiceMsg<KvData>>;
 
 /// Set up the persistent logging type with the existing data handles
