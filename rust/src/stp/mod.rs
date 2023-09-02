@@ -48,6 +48,9 @@ use self::message::StMessage;
 pub mod message;
 pub mod metrics;
 
+//HOW MANY STATE PARTS TO INSTALL AT ONCE
+const INSTALL_CHUNK_SIZE: usize = 128;
+
 // Split a slice into n slices, modified from https://users.rust-lang.org/t/how-to-split-a-slice-into-n-chunks/40008/5
 fn split_evenly<T>(slice: &[T], n: usize) -> impl Iterator<Item = &[T]> {
     struct Iter<'a, I> {
@@ -1212,19 +1215,13 @@ where
         let start_install = Instant::now();
 
         let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
-         //   info!("{:?} // Starting state instalatation, descriptor is {:?}", self.node.id(),descriptor);
-         //   if self.checkpoint.parts.len() != descriptor.parts().len() {
-         //       panic!(
-         //           "Checkpoint parts do not match descriptor {:?} {:?}",
-        //          self.checkpoint.parts.len(),
-        //            descriptor.parts().len()
-        //        );
-        //    }
+         // divide the state in parts, useful if the state is too large to keep in memory
 
             //descriptor.parts()
+
             descriptor
                 .parts()
-                .chunks((descriptor.parts().len() / 6).max(1))
+                .chunks(INSTALL_CHUNK_SIZE)
                 .collect::<Vec<_>>() 
         } else {
             panic!("No Descriptor after state transfer??");
