@@ -1,7 +1,4 @@
 use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::env::args;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier};
 use std::sync::atomic::Ordering::Relaxed;
@@ -31,6 +28,7 @@ use log4rs::filter::threshold::ThresholdFilter;
 use log4rs::config::{Appender, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::Config;
+use rand::{prelude, Rng};
 
 use crate::common::*;
 use crate::serialize::Action;
@@ -482,7 +480,7 @@ fn client_async_main() {
 
     drop(clients_config);
 
-    for mut h in handles {
+    for h in handles {
         let _ = h.join();
     }
 }
@@ -499,9 +497,11 @@ fn run_client(client: SMRClient) {
     let id = client.id();
     println!("run client");
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
-    
+    let mut rand = rand::thread_rng();
 
     for u in 0..100000 {
+
+        let i = rand.gen_range(0..500);
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
 
@@ -509,8 +509,8 @@ fn run_client(client: SMRClient) {
 
         map.insert(id.0.to_string(),kv.as_bytes().to_vec());
 
-        let request = Action::Insert(kv, map);
-        println!("{:?} // Sending req {:?}...", id.0, request);
+        let request = Action::Insert(i.to_string(), map);
+        println!("{:?} // Sending req {:?}...", i.to_string(), request);
 
         if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);

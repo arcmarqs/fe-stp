@@ -8,7 +8,7 @@ use atlas_execution::state::divisible_state::DivisibleState;
 use chrono::DateTime;
 use chrono::offset::Utc;
 use atlas_common::error::*;
-use atlas_common::ordering::SeqNo;
+use atlas_common::ordering::{SeqNo, Orderable};
 use atlas_common::node_id::NodeId;
 use atlas_execution::app::{Application, BatchReplies, Reply, Request, UpdateBatch};
 use atlas_metrics::benchmarks::{BenchmarkHelperStore, Measurements};
@@ -67,9 +67,18 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
             serialize::Action::Insert(key, value) => {
                 let serialized_map = bincode::serialize(value).expect("failed to serialize");
-                let _ = state.db.insert(key, serialized_map);
+                let ret = state.db.insert(key, serialized_map).expect("Invalid element");
 
-                serialize::Reply::None
+                
+                match ret {
+                    Some(vec) => {
+                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
+
+                        serialize::Reply::Single(map)
+                    },
+                    None => serialize::Reply::None,
+                }
+
             }
             serialize::Action::Remove(key) => { 
                 let ret = state.db.remove(key).expect("Invalid Result");
@@ -85,7 +94,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
         };
 
-       // state.db.flush();
+        //state.db.flush();
 
         Arc::new(reply_inner)
     }
@@ -118,7 +127,6 @@ fn update_batch(
             let reply = self.update(state, req);
             reply_batch.add(peer_id, sess, opid, reply);
         }
-
 
         reply_batch
     }

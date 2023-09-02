@@ -1098,8 +1098,7 @@ where
                         let expected = self.checkpoint.req_parts
                             .iter()
                             .filter(|p| p.id() == &received_part.id()).collect::<Vec<_>>();
-                        println!("invalid part received {:?} expected {:?}", received_part.descriptor(), expected);
-                        
+                        println!("from {:?} invalid part received {:?} expected {:?}", header.from(),received_part.descriptor(), expected);
                     }
                 }
 
