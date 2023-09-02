@@ -509,7 +509,13 @@ fn run_client(client: SMRClient) {
 
         map.insert(id.0.to_string(),kv.as_bytes().to_vec());
 
-        let request = Action::Insert(i.to_string(), map);
+        let request = if u % 2 == 0 && i % 2 == 0 {
+            Action::Remove(i.to_string())
+        }
+        else {
+             Action::Insert(i.to_string(), map) 
+            };
+
         println!("{:?} // Sending req {:?}...", i.to_string(), request);
 
         if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
@@ -517,7 +523,7 @@ fn run_client(client: SMRClient) {
         }
     }
 
-    for u in 0..400 {
+    for u in 0..500 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = {Action::Read(kv)};
 
