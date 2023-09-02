@@ -1095,10 +1095,8 @@ where
                         accepted_descriptor.push(received_part.descriptor().clone());
                         accepted_parts.push(received_part.clone());
                     } else {
-                        let expected = self.checkpoint.req_parts
-                            .iter()
-                            .filter(|p| p.id() == &received_part.id()).collect::<Vec<_>>();
-                        println!("from {:?} invalid part received {:?} expected {:?}", header.from(),received_part.descriptor(), expected);
+                        
+                        println!("invalid part received");
                     }
                 }
 
@@ -1223,25 +1221,25 @@ where
         //        );
         //    }
 
-            descriptor.parts()
-           // descriptor
-           //     .parts()
-           //     .chunks((descriptor.parts().len() / 6).max(1))
-           //     .collect::<Vec<_>>() 
+            //descriptor.parts()
+            descriptor
+                .parts()
+                .chunks((descriptor.parts().len() / 6).max(1))
+                .collect::<Vec<_>>() 
         } else {
             panic!("No Descriptor after state transfer??");
         }; 
 
-        //for state_desc in descriptors {
+        for state_desc in descriptors {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
-            let st_frag = self.checkpoint.get_parts(descriptors)?;
+            let st_frag = self.checkpoint.get_parts(&state_desc.to_vec())?;
             let parts: Vec<<S as DivisibleState>::StatePart> =
                 st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
 
             self.install_channel
                 .send(InstallStateMessage::StatePart(parts))
                 .unwrap();
-        //}
+        }
 
         self.checkpoint.seqno = self.largest_cid;
 
