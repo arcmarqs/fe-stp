@@ -165,7 +165,6 @@ pub fn main() {
                                                with_metrics(atlas_client::metric::metrics()),
                                                with_metric_level(MetricLevel::Info)],
                                           influx_db_config(NodeId::from(first_id)));
-                                          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
         client_async_main();
     }
 }
