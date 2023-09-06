@@ -30,6 +30,8 @@ use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::node_id::NodeId;
 use atlas_common::peer_addr::PeerAddr;
 use atlas_metrics::{MetricLevel, with_metric_level, with_metrics};
+use rand::{prelude, Rng};
+
 
 use crate::common::*;
 use crate::serialize::Action;
@@ -163,7 +165,7 @@ pub fn main() {
                                                with_metrics(atlas_client::metric::metrics()),
                                                with_metric_level(MetricLevel::Info)],
                                           influx_db_config(NodeId::from(first_id)));
-
+                                          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
         client_async_main();
     }
 }
