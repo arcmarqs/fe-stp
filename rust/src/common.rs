@@ -173,7 +173,7 @@ pub fn influx_db_config(id: NodeId) -> InfluxDBArgs {
    // let db_name = std::env::var("INFLUX_DB_NAME").expect("INFLUX_DB_NAME not set");
    // let user = std::env::var("INFLUX_USER").expect("INFLUX_USER not set");
    // let password = std::env::var("INFLUX_PASSWORD").expect("INFLUX_PASSWORD not set");
-   let ip = "http://localhost:8086".into();
+   let ip = "http://10.0.10.7:8086".into();
    let db_name = "atlas".into();
    let user = "admin".into();
    let password = "tese2023".into();
