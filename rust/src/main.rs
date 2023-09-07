@@ -21,5 +21,7 @@ fn main() {
 
     if is_local {
         local::main()
+    } else {
+        cop::main()
     }
 }
