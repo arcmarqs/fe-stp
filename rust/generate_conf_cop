@@ -23,8 +23,8 @@ CLIENT_MACHINES="10.0.10.5"
 CURR_IP=0
 for id in $(seq 0 $(expr "$NUM_REPLICAS" - 1)); do
     sni=srv${id}
-    port=$(expr 10000 + "$id")
-    rep_port=$(expr 12000 + "$id")
+    port=$(expr 10300 + "$id")
+    rep_port=$(expr 12300 + "$id")
     host=$(expr "$id" % 4)
 
     #1gbe
