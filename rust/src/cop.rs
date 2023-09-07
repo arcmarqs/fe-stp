@@ -3,11 +3,9 @@ use std::env::args;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
 
 use atlas_common::collections::HashMap;
 use atlas_common::error::*;
-use chrono::offset::Utc;
 use intmap::IntMap;
 use konst::primitive::parse_usize;
 use log4rs::append::Append;
@@ -21,7 +19,7 @@ use log4rs::config::{Appender, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::threshold::ThresholdFilter;
 use log::LevelFilter;
-use semaphores::RawSemaphore;
+use rand::Rng;
 
 use atlas_client::client::ordered_client::Ordered;
 use atlas_client::concurrent_client::ConcurrentClient;
@@ -30,8 +28,6 @@ use atlas_common::crypto::signature::{KeyPair, PublicKey};
 use atlas_common::node_id::NodeId;
 use atlas_common::peer_addr::PeerAddr;
 use atlas_metrics::{MetricLevel, with_metric_level, with_metrics};
-use rand::{prelude, Rng};
-
 
 use crate::common::*;
 use crate::serialize::Action;
@@ -77,6 +73,31 @@ fn file_appender(id: u32, str: &str) -> Box<dyn Append> {
         .wrapped_msg(ErrorKind::MsgLog, "Failed to create rolling file appender").unwrap())
 }
 
+fn generate_log(id: u32) {
+    let console_appender = ConsoleAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} {d} - {m}{n}"))).build();
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("comm", file_appender(id, "_comm")))
+        .appender(Appender::builder().build("reconfig", file_appender(id, "_reconfig")))
+        .appender(Appender::builder().build("common", file_appender(id, "_common")))
+        .appender(Appender::builder().build("consensus", file_appender(id, "_consensus")))
+        .appender(Appender::builder().build("file", file_appender(id, "")))
+        .appender(Appender::builder().build("log_transfer", file_appender(id, "_log_transfer")))
+        .appender(Appender::builder().build("state_transfer", file_appender(id, "_state_transfer")))
+        .appender(Appender::builder().filter(Box::new(ThresholdFilter::new(LevelFilter::Warn))).build("console", Box::new(console_appender)))
+
+        .logger(Logger::builder().appender("comm").build("atlas_communication", LevelFilter::Debug))
+        .logger(Logger::builder().appender("common").build("atlas_common", LevelFilter::Debug))
+        .logger(Logger::builder().appender("reconfig").build("atlas_reconfiguration", LevelFilter::Debug))
+        .logger(Logger::builder().appender("consensus").build("febft_pbft_consensus", LevelFilter::Debug))
+        .logger(Logger::builder().appender("log_transfer").build("atlas_log_transfer", LevelFilter::Debug))
+        .logger(Logger::builder().appender("state_transfer").build("febft_state_transfer", LevelFilter::Debug))
+        .build(Root::builder().appender("file").build(LevelFilter::Debug), ).wrapped(ErrorKind::MsgLog).unwrap();
+
+    let _handle = log4rs::init_config(config).wrapped(ErrorKind::MsgLog).unwrap();
+}
+
 pub fn main() {
     let is_client = std::env::var("CLIENT")
         .map(|x| x == "1")
@@ -93,58 +114,35 @@ pub fn main() {
         .next()
         .unwrap();
 
-    let console_appender = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} {d} - {m}{n}"))).build();
-
-    let config = Config::builder()
-        .appender(Appender::builder().build("comm", file_appender(id, "_comm")))
-        .appender(Appender::builder().build("reconfig", file_appender(id, "_reconfig")))
-        .appender(Appender::builder().build("common", file_appender(id, "_common")))
-        .appender(Appender::builder().build("consensus", file_appender(id, "_consensus")))
-        .appender(Appender::builder().build("file", file_appender(id, "")))
-        .appender(Appender::builder().filter(Box::new(ThresholdFilter::new(LevelFilter::Warn))).build("console", Box::new(console_appender)))
-        .logger(Logger::builder()
-            .appender("comm").build("atlas_communication", LevelFilter::Info))
-        .logger(Logger::builder().appender("common").build("atlas_common", LevelFilter::Trace))
-        .logger(Logger::builder()
-            .appender("reconfig").build("atlas_reconfiguration", LevelFilter::Trace))
-        .logger(Logger::builder()
-            .appender("consensus").build("febft_pbft_consensus", LevelFilter::Trace))
-        .build(Root::builder()
-                   .appender("console")
-                   .appender("file")
-                   .build(LevelFilter::Debug),
-        ).wrapped(ErrorKind::MsgLog).unwrap();
-
-    let _handle = log4rs::init_config(config).wrapped(ErrorKind::MsgLog).unwrap();
 
     if !is_client {
-        let replica_id: u32 = std::env::var("ID")
+        let id: u32 = std::env::var("ID")
             .iter()
             .flat_map(|id| id.parse())
             .next()
             .unwrap();
+
+        generate_log(id);
 
         let conf = InitConfig {
             //If we are the client, we want to have many threads to send stuff to replicas
             threadpool_threads,
             async_threads,
             //If we are the client, we don't want any threads to send to other clients as that will never happen
-            id: Some(replica_id.to_string()),
+            id: Some(id.to_string()),
         };
 
         let _guard = unsafe { init(conf).unwrap() };
-        let node_id = NodeId::from(replica_id);
+        let node_id = NodeId::from(id);
 
         atlas_metrics::initialize_metrics(vec![with_metrics(febft_pbft_consensus::bft::metric::metrics()),
-        with_metrics(atlas_core::metric::metrics()),
-        with_metrics(atlas_communication::metric::metrics()),
-        with_metrics(atlas_replica::metric::metrics()),
-        with_metrics(atlas_log_transfer::metrics::metrics()),
-        with_metrics(atlas_divisible_state::metrics::metrics()),
-        with_metrics(super::stp::metrics::metrics()),
-        with_metric_level(MetricLevel::Trace)],
-   influx_db_config(node_id));
+                                               with_metrics(atlas_core::metric::metrics()),
+                                               with_metrics(atlas_communication::metric::metrics()),
+                                               with_metrics(atlas_replica::metric::metrics()),
+                                               with_metrics(atlas_log_transfer::metrics::metrics()),
+                                               with_metrics(atlas_divisible_state::metrics::metrics()),
+                                               with_metric_level(MetricLevel::Trace)],
+                                          influx_db_config(node_id));
 
         main_(node_id);
     } else {
@@ -156,102 +154,102 @@ pub fn main() {
             id: None,
         };
 
-
         let _guard = unsafe { init(conf).unwrap() };
 
         let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
 
-         atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
+        atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
                                                with_metrics(atlas_client::metric::metrics()),
                                                with_metric_level(MetricLevel::Info)],
                                           influx_db_config(NodeId::from(first_id)));
+
         client_async_main();
     }
 }
 
 fn main_(id: NodeId) {
-    let mut replica = {
-        println!("Started working on the replica");
+    let clients_config = parse_config("./config/clients.config").unwrap();
+    let replicas_config = parse_config("./config/replicas.config").unwrap();
 
-        //TODO: don't have this hardcoded?
-        let first_cli = NodeId::from(1000u32);
+    println!("Read configurations.");
 
-        let clients_config = parse_config("./config/clients.config").unwrap();
-        let replicas_config = parse_config("./config/replicas.config").unwrap();
+    let mut secret_keys: IntMap<KeyPair> = sk_stream()
+        .take(replicas_config.len())
+        .enumerate()
+        .map(|(id, sk)| (id as u64, sk))
+        .collect();
+    let public_keys: IntMap<PublicKey> = secret_keys
+        .iter()
+        .map(|(id, sk)| (*id, sk.public_key().into()))
+        .collect();
 
-        println!("Finished reading replica config.");
+    println!("Read keys.");
 
-        let mut secret_keys: IntMap<KeyPair> = sk_stream()
-            .take(clients_config.len())
-            .enumerate()
-            .map(|(id, sk)| (u64::from(first_cli) + id as u64, sk))
-            .chain(sk_stream()
-                .take(replicas_config.len())
-                .enumerate()
-                .map(|(id, sk)| (id as u64, sk)))
-            .collect();
+    let replica_id: usize = std::env::args()
+    .nth(1)
+    .expect("No replica specified")
+    .trim()
+    .parse()
+    .expect("Expected an integer");
 
-        let public_keys: IntMap<PublicKey> = secret_keys
-            .iter()
-            .map(|(id, sk)| (*id, sk.public_key().into()))
-            .collect();
+    let replica = &replicas_config[replica_id];
 
-        println!("Finished reading keys.");
+    let id = NodeId::from(replica.id);
 
-        let addrs = {
-            let mut addrs = IntMap::new();
-            for replica in &replicas_config {
-                let id = NodeId::from(replica.id);
-                let addr = format!("{}:{}", replica.ipaddr, replica.portno);
-                let replica_addr = format!("{}:{}", replica.ipaddr, replica.rep_portno.unwrap());
+    println!("Starting replica {:?}", id);
 
-                let replica_p_addr = PeerAddr::new_replica(crate::addr!(&replica.hostname => addr),
-                                                           crate::addr!(&replica.hostname => replica_addr));
+    let addrs = {
+        let mut addrs = IntMap::new();
 
-                addrs.insert(id.into(), replica_p_addr);
-            }
+        for other in &replicas_config {
+            let id = NodeId::from(other.id);
+            let addr = format!("{}:{}", other.ipaddr, other.portno);
+            let replica_addr = format!("{}:{}", other.ipaddr, other.rep_portno.unwrap());
 
-            for other in &clients_config {
-                let id = NodeId::from(other.id);
-                let addr = format!("{}:{}", other.ipaddr, other.portno);
+            let otherrep_addr = PeerAddr::new_replica(
+                crate::addr!(&other.hostname => addr),
+                crate::addr!(&other.hostname => replica_addr),
+            );
 
-                let client_addr = PeerAddr::new(crate::addr!(&other.hostname => addr));
+            addrs.insert(id.into(), otherrep_addr);
+        }
 
-                addrs.insert(id.into(), client_addr);
-            }
+        for client in &clients_config {
+            let id = NodeId::from(client.id);
+            let addr = format!("{}:{}", client.ipaddr, client.portno);
 
-            addrs
-        };
+            let replica = PeerAddr::new(crate::addr!(&client.hostname => addr));
 
-        /* let comm_stats = Some(Arc::new(CommStats::new(id,
-                                                 first_cli,
-                                                 MicrobenchmarkData::MEASUREMENT_INTERVAL))); */
+            addrs.insert(id.into(), replica);
+        }
 
-        let comm_stats = None;
-
-        let sk = secret_keys.remove(id.into()).unwrap();
-
-        let fut = setup_replica(
-            replicas_config.len(),
-            id,
-            sk,
-            addrs,
-            public_keys.clone(),
-            comm_stats,
-        );
-
-        println!("Bootstrapping replica #{}", u32::from(id));
-        let replica = rt::block_on(fut).unwrap();
-        println!("Running replica #{}", u32::from(id));
-
-        //Here we want to launch a statistics thread for each replica since they are on different machines
-        //crate::os_statistics::start_statistics_thread(id);
-
-        replica
+        addrs
     };
 
-    // run forever
+    let sk = secret_keys.remove(id.into()).unwrap();
+
+    println!("Setting up replica...");
+    let fut = setup_replica(
+        replicas_config.len(),
+        id,
+        sk,
+        addrs,
+        public_keys.clone(),
+        None,
+    );
+
+    let mut replica = rt::block_on(async move {
+        println!("Bootstrapping replica #{}", u32::from(id));
+        let replica = fut.await.unwrap();
+        println!("Running replica #{}", u32::from(id));
+        replica
+    });
+
     replica.run().unwrap();
+    //We will only launch a single OS monitoring thread since all replicas also run on the same system
+    // crate::os_statistics::start_statistics_thread(NodeId(0));
+
+    drop((secret_keys, public_keys, clients_config, replicas_config));
 }
 
 fn client_async_main() {
@@ -290,6 +288,8 @@ fn client_async_main() {
 
     for i in 0..client_count {
         let id = NodeId::from(first_id + i);
+
+        generate_log(id.0 as u32);
 
         let addrs = {
             let mut addrs = IntMap::new();
@@ -369,6 +369,7 @@ fn client_async_main() {
         let _ = h.join();
     }
 }
+
 
 fn sk_stream() -> impl Iterator<Item=KeyPair> {
     std::iter::repeat_with(|| {
