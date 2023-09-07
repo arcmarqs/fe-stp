@@ -1,5 +1,5 @@
 export COMPILE=1
-export LOCAL=1
+export LOCAL=0
 export SINGLE_SERVER=0
 
 export BACKEND=rust
