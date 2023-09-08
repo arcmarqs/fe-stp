@@ -377,22 +377,17 @@ fn run_client(client: SMRClient) {
 
     for u in 0..3000000 {
 
-        let i = rand.gen_range(0..10000);
+        let i = rand.gen_range(0..1000000);
 
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        let kv = format!("{}{}", id.0.to_string(), i.to_string());
 
         let mut map: HashMap<String,Vec<u8>> = HashMap::default();
 
         map.insert(id.0.to_string(),kv.as_bytes().to_vec());
 
-        let request = if u % 2 == 0 && i % 2 == 0 {
-            Action::Remove(i.to_string())
-        }
-        else {
-             Action::Insert(i.to_string(), map) 
-            };
+        let request = Action::Insert(kv, map);
 
-        println!("{:?} // Sending req {:?}...", i.to_string(), request);
+        println!("{:?} // Sending req {:?}...", id, request);
 
         if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
@@ -409,7 +404,5 @@ fn run_client(client: SMRClient) {
             println!("state: {:?}", reply);
         }
     }
-
-
    
 }
