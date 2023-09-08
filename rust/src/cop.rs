@@ -385,7 +385,7 @@ fn run_client(client: SMRClient) {
 
         map.insert(id.0.to_string(),kv.as_bytes().to_vec());
 
-        let request = Action::Insert(kv, map);
+        let request = Action::Insert(i.to_string(), map);
 
         println!("{:?} // Sending req {:?}...", id, request);
 
@@ -396,7 +396,7 @@ fn run_client(client: SMRClient) {
 
     for u in 0..100000 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = {Action::Read(kv)};
+        let request = {Action::Read(u.to_string())};
 
         println!("{:?} // Sending req {:?}...", id.0, request);
 
