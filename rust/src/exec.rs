@@ -51,10 +51,9 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
         state: &mut StateOrchestrator,
         request: Request<Self, StateOrchestrator>,
     ) -> Reply<Self, StateOrchestrator> {
-        let db_lock = state.db.lock().expect("failed to lock");
         let reply_inner = match request.as_ref() {
             serialize::Action::Read(key) => {
-                let ret = db_lock.get(key).expect("Invalid element");
+                let ret = state.db.get(key).expect("Invalid element");
 
                 match ret {
                     Some(vec) => {
@@ -68,7 +67,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
             serialize::Action::Insert(key, value) => {
                 let serialized_map = bincode::serialize(value).expect("failed to serialize");
-                let ret = db_lock.insert(key, serialized_map).expect("Invalid element");
+                let ret = state.db.insert(key, serialized_map).expect("Invalid element");
 
                 
                 match ret {
@@ -81,7 +80,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
                 }
             }
             serialize::Action::Remove(key) => { 
-                let ret = db_lock.remove(key).expect("Invalid Result");
+                let ret = state.db.remove(key).expect("Invalid Result");
 
                 match ret {
                     Some(vec) => {
