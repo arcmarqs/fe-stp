@@ -613,15 +613,15 @@ where
     where
         V: NetworkView,
     {
-        if self.checkpoint.get_seqno() < seq
-            || (seq != SeqNo::ZERO && self.checkpoint.descriptor.is_none())
-        {
+       // if self.checkpoint.get_seqno() < seq
+        //    || (seq != SeqNo::ZERO && self.checkpoint.descriptor.is_none())
+       // {
             metric_duration_start(CHECKPOINT_UPDATE_TIME_ID);
 
             Ok(ExecutionResult::BeginCheckpoint)
-        } else {
-            Ok(ExecutionResult::Nil)
-        }
+      //  } else {
+       //     Ok(ExecutionResult::Nil)
+       // }
     }
 
     fn handle_timeout<V>(&mut self, view: V, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>

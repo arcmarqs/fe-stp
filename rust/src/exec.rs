@@ -120,7 +120,7 @@ fn update_batch(
         batch: UpdateBatch<Request<Self, StateOrchestrator>>,
     ) -> BatchReplies<Reply<Self, StateOrchestrator>> {
         let mut reply_batch = BatchReplies::with_capacity(batch.len());
-        
+    
         for update in batch.into_inner() {
             let (peer_id, sess, opid, req) = update.into_inner();
             let reply = self.update(state, req);
