@@ -78,7 +78,6 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
                     },
                     None => serialize::Reply::None,
                 }
-
             }
             serialize::Action::Remove(key) => { 
                 let ret = state.db.remove(key).expect("Invalid Result");
@@ -94,7 +93,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
         };
 
-        //state.db.flush();
+        state.db.flush();
 
         Arc::new(reply_inner)
     }
