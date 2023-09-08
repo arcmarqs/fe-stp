@@ -93,7 +93,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
             }
         };
 
-        state.db.flush();
+       // state.db.flush();
 
         Arc::new(reply_inner)
     }
