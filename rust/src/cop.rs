@@ -377,11 +377,11 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..500000 as u32 {
 
-        let i : u64 = rand.gen_range(1..20000);
+        let i : u64 = rand.gen_range(1..200000);
 
         let kv = format!("{}{}", id.0.to_string(), i.to_string());
 
-        let request = Action::Insert(kv.as_bytes().to_owned(), kv.as_bytes().to_owned());
+        let request = Action::Insert(i.to_be_bytes().to_vec(), kv.as_bytes().to_owned());
 
 
         println!("{:?} // Sending req {:?}...", id, request);
