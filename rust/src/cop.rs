@@ -379,7 +379,7 @@ fn run_client(client: SMRClient) {
 
         let i = rand.gen_range(0..100000);
 
-        let kv = format!("{}{}", id.0.to_string(), i.to_string());
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
 
         let mut map: HashMap<String,Vec<u8>> = HashMap::default();
 
