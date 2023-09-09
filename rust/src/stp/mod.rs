@@ -1308,6 +1308,8 @@ where
             seq_no
         );
 
+        println!("parts {:?}", descriptor.parts());
+
         if self.checkpoint.get_seqno() < seq_no {
             self.checkpoint.seqno = seq_no;
         
