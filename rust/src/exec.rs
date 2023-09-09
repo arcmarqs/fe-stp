@@ -57,24 +57,21 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
 
                 match ret {
                     Some(vec) => {
-                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
 
-                        serialize::Reply::Single(map)
+                        serialize::Reply::Single(vec.as_ref().to_owned())
                     },
                     None => serialize::Reply::None,
                 }
 
             }
             serialize::Action::Insert(key, value) => {
-                let serialized_map = bincode::serialize(value).expect("failed to serialize");
-                let ret = state.db.insert(key, serialized_map).expect("Invalid element");
+                let ret = state.db.insert(key, value.to_owned()).expect("Invalid element");
 
                 
                 match ret {
                     Some(vec) => {
-                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
 
-                        serialize::Reply::Single(map)
+                        serialize::Reply::Single(vec.as_ref().to_owned())
                     },
                     None => serialize::Reply::None,
                 }
@@ -84,9 +81,8 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
 
                 match ret {
                     Some(vec) => {
-                        let map: HashMap<String, Vec<u8>> = bincode::deserialize(vec.as_ref()).expect("deserialize");
 
-                        serialize::Reply::Single(map)
+                        serialize::Reply::Single(vec.as_ref().to_owned())
                     },
                     None => serialize::Reply::None,
                 }

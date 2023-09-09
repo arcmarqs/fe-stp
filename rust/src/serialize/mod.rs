@@ -27,16 +27,15 @@ pub struct KvData;
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Action {
-    Read(String),
-    Insert(String, HashMap<String,Vec<u8>>),
-    Remove(String)
+    Read(Vec<u8>),
+    Insert(Vec<u8>,Vec<u8>),
+    Remove(Vec<u8>)
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Reply {
     None,
-    Single(HashMap<String,Vec<u8>>),
-    Multiple(Vec<HashMap<String,Vec<u8>>>),
+    Single(Vec<u8>),
 }
 
 
