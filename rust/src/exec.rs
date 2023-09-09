@@ -33,11 +33,6 @@ fn initial_state() -> Result<StateOrchestrator> {
     let path = format!("{}{}", "./appdata_",id);
 
     let state = StateOrchestrator::new(&path);   
-
-    let _ = spawn(
-        monitor_changes(
-            state.updates.clone(),
-            state.get_subscriber()));
             
     Ok(state)
 }
