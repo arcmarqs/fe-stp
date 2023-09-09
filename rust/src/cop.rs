@@ -377,7 +377,7 @@ fn run_client(client: SMRClient) {
 
     for u in 0..500000 {
 
-        let i = rand.gen_range(1..50000);
+        let i = rand.gen_range(1..20000);
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
 
@@ -385,12 +385,7 @@ fn run_client(client: SMRClient) {
 
         map.insert(id.0.to_string(),kv.as_bytes().to_vec());
 
-        let request = if u % 2 == 0 && i % 2 == 0 {
-            Action::Remove(i.to_string())
-        }
-        else {
-             Action::Insert(i.to_string(), map) 
-            };
+        let request = Action::Insert(i.to_string(), map);
 
 
         println!("{:?} // Sending req {:?}...", id, request);
