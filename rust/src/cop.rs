@@ -376,7 +376,7 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..50000000 as u128 {
+    for u  in 0..50000000 as u64 {
 
         let i : u32 = rand.gen_range(1..1000000);
 
