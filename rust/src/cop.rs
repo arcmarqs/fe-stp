@@ -1,5 +1,6 @@
 use std::env;
 use std::env::args;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
@@ -375,14 +376,16 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..500000 as u32 {
+    for u  in 0..5000000 as u64 {
 
-        let i : u128 = rand.gen_range(1..10000000);
+        let i : u128 = rand.gen_range(1..10000);
 
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        //let kv = format!("{}{}", id.0.to_string(), i.to_string());
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&i.to_be_bytes());
+        let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = Action::Insert(kv.as_bytes().to_vec(), i.to_be_bytes().to_vec());
-
+        let request = Action::Insert(u.to_be_bytes().to_vec(), value);
 
         println!("{:?} // Sending req {:?}...", id, request);
 

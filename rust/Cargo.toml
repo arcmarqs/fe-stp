@@ -30,6 +30,7 @@ log4rs = {version =  "1.2.0", features = ["all_components"] }
 bincode = "1.0.0"
 mprober-lib = "0.1.7"
 procinfo = "0.4.2"
+blake3 = "*"
 
 atlas-common = { path = "../../Atlas/atlas-common" }
 atlas-communication = { path = "../../Atlas/atlas-communication" }
