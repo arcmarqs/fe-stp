@@ -376,16 +376,16 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..5000000 as u64 {
+    for u  in 0..50000000 as u128 {
 
-        let i : u128 = rand.gen_range(1..10000);
+        let i : u32 = rand.gen_range(1..1000000);
 
-        //let kv = format!("{}{}", id.0.to_string(), i.to_string());
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&i.to_be_bytes());
-        let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
+        let kv = format!("{}{}", id.0.to_string(), i.to_string());
+       // let mut hasher = blake3::Hasher::new();
+       // hasher.update(&i.to_be_bytes());
+       // let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = Action::Insert(u.to_be_bytes().to_vec(), value);
+        let request = Action::Insert(kv.into_bytes(),u.to_be_bytes().to_vec());
 
         println!("{:?} // Sending req {:?}...", id, request);
 
