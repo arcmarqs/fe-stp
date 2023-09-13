@@ -376,7 +376,7 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..50000000 as u64 {
+    for u  in 0..50000000 as u128 {
 
         let i : u64 = rand.gen_range(1..10000000);
 
@@ -385,15 +385,7 @@ fn run_client(client: SMRClient) {
        // hasher.update(&i.to_be_bytes());
        // let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = if u % 3 == 0 && i % 2 == 0 {
-            Action::Remove(i.to_be_bytes().to_vec())
-            } 
-            else if i % 2 == 0 && i % 3 == 0 {
-                Action::Read(i.to_be_bytes().to_vec())
-            }
-             else {
-                Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes())
-             };
+        let request = Action::Insert(kv.into_bytes(),u.to_be_bytes().to_vec());
 
         println!("{:?} // Sending req {:?}...", id, request);
 
