@@ -385,7 +385,12 @@ fn run_client(client: SMRClient) {
        // hasher.update(&i.to_be_bytes());
        // let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes());
+        let request = if u % 3 == 0 && i % 2 == 0 {
+            Action::Remove(i.to_be_bytes().to_vec())
+            }
+             else {
+                Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes())
+             };
 
         println!("{:?} // Sending req {:?}...", id, request);
 
