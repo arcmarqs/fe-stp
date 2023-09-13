@@ -382,7 +382,12 @@ fn run_client(client: SMRClient) {
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
     
-        let request = Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes());
+        let request = if u % 4 == 0 {
+            Action::Read(i.to_be_bytes().to_vec())
+        } 
+        else {
+            Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes())
+        };
 
         println!("{:?} // Sending req {:?}...", id, request);
 
