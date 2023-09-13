@@ -387,6 +387,9 @@ fn run_client(client: SMRClient) {
 
         let request = if u % 3 == 0 && i % 2 == 0 {
             Action::Remove(i.to_be_bytes().to_vec())
+            } 
+            else if i % 2 == 0 && i % 3 == 0 {
+                Action::Read(i.to_be_bytes().to_vec())
             }
              else {
                 Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes())
