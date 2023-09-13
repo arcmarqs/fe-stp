@@ -385,7 +385,7 @@ fn run_client(client: SMRClient) {
        // hasher.update(&i.to_be_bytes());
        // let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = if u <= 350000 { 
+        let request = if u <= 35000 { 
             Action::Insert(u.to_be_bytes().to_vec(),kv.into_bytes())
         } else {
             Action::Read(u.to_be_bytes().to_vec())
