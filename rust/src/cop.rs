@@ -378,7 +378,7 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..10000000 as u128 {
 
-        let i : u64 = rand.gen_range(1..10000000);
+        let i : u64 = rand.gen_range(1..100000000);
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
     
