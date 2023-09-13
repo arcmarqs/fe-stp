@@ -6,7 +6,7 @@ export BACKEND=rust
 export VERBOSE=true
 export UPDATE_MAX_FDS=0
 
-export NUM_CLIENTS=3
+export NUM_CLIENTS=1
 export CLIENT_GEN=3000
 export NUM_REPLICAS=6
 export BATCH_SIZE=1000
