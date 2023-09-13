@@ -376,13 +376,13 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..1000000 as u128 {
+    for u  in 0..10000000 as u128 {
 
         let i : u64 = rand.gen_range(1..10000000);
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
     
-        let request = if u % 5 == 0 {
+        let request = if u % 3 == 0 {
             Action::Read(i.to_be_bytes().to_vec())
         } 
         else {
