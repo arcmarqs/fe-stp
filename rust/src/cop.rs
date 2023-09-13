@@ -378,15 +378,15 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..1000000 as u128 {
 
-        let i : u32 = rand.gen_range(1..10000000);
+        let i : u64 = rand.gen_range(1..10000000);
 
-        let kv = format!("{}{}", id.0.to_string(), i.to_string());
+        let kv = format!("{}{}", id.0.to_string(), u.to_string());
     
         let request = if u % 5 == 0 {
-            Action::Read(kv.into_bytes())
+            Action::Read(i.to_be_bytes().to_vec())
         } 
         else {
-            Action::Insert(kv.into_bytes(), u.to_be_bytes().to_vec())
+            Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes())
         };
 
         println!("{:?} // Sending req {:?}...", id, request);
