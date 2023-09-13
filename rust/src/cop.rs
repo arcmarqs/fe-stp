@@ -378,14 +378,14 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..50000000 as u64 {
 
-        let i : u32 = rand.gen_range(1..1000000);
+        let i : u64 = rand.gen_range(1..10000000);
 
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        let kv = format!("{}{}", id.0.to_string(), i.to_string());
        // let mut hasher = blake3::Hasher::new();
        // hasher.update(&i.to_be_bytes());
        // let value = vec![i.to_be_bytes().to_vec(),hasher.finalize().as_bytes().to_vec()].concat();
 
-        let request = Action::Insert(kv.into_bytes(),i.to_be_bytes().to_vec());
+        let request = Action::Insert(i.to_be_bytes().to_vec(),kv.into_bytes());
 
         println!("{:?} // Sending req {:?}...", id, request);
 
