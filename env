@@ -10,12 +10,12 @@ export NUM_CLIENTS=2
 export CLIENT_GEN=3000
 export NUM_REPLICAS=6
 export BATCH_SIZE=1000
-export MAX_BATCH_SIZE=15000
+export MAX_BATCH_SIZE=30000
 export CLIENTS_PER_POOL=1000
 
 #Global batch size from all joined client pools
 export GLOBAL_BATCH_SIZE=5000
-export GLOBAL_BATCH_SLEEP_MICROS=1000
+export GLOBAL_BATCH_SLEEP_MICROS=100
 
 export THREADPOOL_THREADS=16
 export ASYNC_THREADS=6
@@ -23,9 +23,9 @@ export ASYNC_THREADS=6
 export WATERMARK=1
 
 #1 ms batch timeout
-export BATCH_TIMEOUT_MICROS=1000
+export BATCH_TIMEOUT_MICROS=100
 #1 ms sleep between client pool collections
-export BATCH_SLEEP_MICROS=1000
+export BATCH_SLEEP_MICROS=100
 
 export OPS_NUMBER=5000000
 export CONCURRENT_RQS=50

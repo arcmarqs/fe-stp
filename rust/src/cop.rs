@@ -382,7 +382,7 @@ fn run_client(client: SMRClient) {
 
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
     
-        let request = if u % 3 == 0 {
+        let request = if u > 150000 {
             Action::Read(i.to_be_bytes().to_vec())
         } 
         else {
