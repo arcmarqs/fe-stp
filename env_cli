@@ -10,7 +10,7 @@ export NUM_CLIENTS=5
 export CLIENT_GEN=3000
 export NUM_REPLICAS=6
 export BATCH_SIZE=1000
-export MAX_BATCH_SIZE=10000
+export MAX_BATCH_SIZE=25000
 export CLIENTS_PER_POOL=1000
 
 #Global batch size from all joined client pools
