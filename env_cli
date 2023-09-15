@@ -23,13 +23,13 @@ export ASYNC_THREADS=6
 export WATERMARK=1
 
 #1 ms batch timeouts
-export BATCH_TIMEOUT_MICROS=500
+export BATCH_TIMEOUT_MICROS=100
 #1 ms sleep between client pool collections
-export BATCH_SLEEP_MICROS=500
+export BATCH_SLEEP_MICROS=100
 
 export OPS_NUMBER=5000000
 export CONCURRENT_RQS=50
-export MEASUREMENT_INTERVAL=2000
+export MEASUREMENT_INTERVAL=1000
 
 export STATE_SIZE=56
 export REPLY_SIZE=56
