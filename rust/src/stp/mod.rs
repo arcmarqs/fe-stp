@@ -144,7 +144,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         self.seqno
     }
 
-    pub fn part_description(&self, pid: u64) -> Option<&S::PartDescription> {
+    pub fn part_description(&self, pid: Vec<u8>) -> Option<&S::PartDescription> {
         match self.descriptor() {
             Some(descriptor) => {
                 if let Some(part) = descriptor.parts().iter().find(|x| x.id() == &pid) {
@@ -164,7 +164,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    fn read_local_part(&self, part_id: &u64) -> Result<Option<ReadOnly<S::StatePart>>> {
+    fn read_local_part(&self, part_id: &Vec<u8>) -> Result<Option<ReadOnly<S::StatePart>>> {
         let key: Vec<u8> = bincode::serialize(part_id).expect("failed to serialize");
 
         let res = self.parts.get("state", key)?;
