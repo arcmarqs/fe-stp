@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Binary};
 use std::fs::{self, OpenOptions};
 use std::io::{prelude::*, Write};
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -212,10 +213,25 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         Ok(vec.into_boxed_slice())
     }
 
+    pub fn get_parts_by_ref(
+        &self,
+        parts_desc: &[Arc<S::PartDescription>],
+    ) -> Result<Box<[Arc<ReadOnly<S::StatePart>>]>> {
+        // need to figure out what to do if the part read doesn't match the descriptor 
+        let mut vec = Vec::new();
+        for part in parts_desc {
+            if let Some(p) = self.read_local_part(part.id())? {
+                vec.push(Arc::new(p));
+            }
+        }
+
+        Ok(vec.into_boxed_slice())
+    }
+
     pub fn get_req_parts(&mut self) -> Vec<Arc<S::PartDescription>> {
         let parts = self.descriptor().unwrap().parts();
         let mut parts_to_req = Vec::new();
-        for part in parts.iter() {
+        for part in parts {
             if let Some(local_part) = self.read_local_part(part.id()).expect("failed to read part") {
                 if local_part.hash().as_ref() == part.content_description() {
                     // We've confirmed that this part is valid so we don't need to request it
@@ -223,7 +239,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
                 }
             }
 
-            parts_to_req.push(part.clone().into());
+            parts_to_req.push(part.clone());
         }
 
         parts_to_req
@@ -1216,9 +1232,7 @@ where
         self.curr_seq
     }
 
-    fn install_state(&mut self) -> Result<STResult>
-    {
-
+    fn install_state(&mut self) -> Result<STResult> {
         println!("START INSTALL STATE");
         let start_install = Instant::now();
         if self.checkpoint.descriptor().is_none() {
@@ -1228,12 +1242,16 @@ where
 
             //descriptor.parts()
 
-           let descriptor = self.checkpoint.descriptor().unwrap().parts();
+        let descriptor= self
+            .checkpoint
+            .descriptor()
+            .unwrap()
+            .parts();
            
     
         for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
-            let st_frag = self.checkpoint.get_parts(state_desc)?;
+            let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
             let parts: Vec<<S as DivisibleState>::StatePart> =
                 st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
 
