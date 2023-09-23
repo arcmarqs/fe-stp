@@ -1,17 +1,10 @@
-use std::ops::Deref;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
-use atlas_common::async_runtime::spawn;
-use atlas_common::collections::HashMap;
-use atlas_divisible_state::state_orchestrator::{StateOrchestrator, self, monitor_changes};
-use atlas_execution::state::divisible_state::DivisibleState;
-use chrono::DateTime;
-use chrono::offset::Utc;
+use atlas_divisible_state::state_orchestrator::StateOrchestrator;
+
 use atlas_common::error::*;
-use atlas_common::ordering::{SeqNo, Orderable};
-use atlas_common::node_id::NodeId;
+
 use atlas_execution::app::{Application, BatchReplies, Reply, Request, UpdateBatch};
-use atlas_metrics::benchmarks::{BenchmarkHelperStore, Measurements};
 
 use crate::serialize;
 
@@ -48,9 +41,7 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
     ) -> Reply<Self, StateOrchestrator> {
         let reply_inner = match request.as_ref() {
             serialize::Action::Read(key) => {
-                let ret = state.db.get(key).expect("Invalid element");
-
-                match ret {
+                match state.get(key) {
                     Some(vec) => {
 
                         serialize::Reply::Single(vec.as_ref().to_owned())
@@ -60,10 +51,8 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
 
             }
             serialize::Action::Insert(key, value) => {
-                let ret = state.db.insert(key, value.to_owned()).expect("Invalid element");
-
                 
-                match ret {
+                match state.insert(key, value.to_owned()) {
                     Some(vec) => {
 
                         serialize::Reply::Single(vec.as_ref().to_owned())
@@ -72,9 +61,8 @@ fn unordered_execution(&self, state: &StateOrchestrator, request: Request<Self, 
                 }
             }
             serialize::Action::Remove(key) => { 
-                let ret = state.db.remove(key).expect("Invalid Result");
 
-                match ret {
+                match state.remove(key) {
                     Some(vec) => {
 
                         serialize::Reply::Single(vec.as_ref().to_owned())

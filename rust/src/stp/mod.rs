@@ -33,7 +33,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::StateTransfer;
 use atlas_core::persistent_log::{
-    DivisibleStateLog, OperationMode, PersistableStateTransferProtocol,
+    DivisibleStateLog, PersistableStateTransferProtocol,
 };
 use atlas_core::state_transfer::divisible_state::*;
 use atlas_core::state_transfer::{CstM, STResult, STTimeoutResult, StateTransferProtocol};
@@ -89,8 +89,8 @@ struct PersistentCheckpoint<S: DivisibleState> {
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
     pub parts: KVDB,
-    // list of parts we need in orget to recover the state
-    req_parts: Vec<S::PartDescription>,
+    // list of parts we need in order to recover the state
+    req_parts: Vec<Arc<S::PartDescription>>,
 }
 
 impl<S: DivisibleState> Debug for PersistentCheckpoint<S> {
@@ -133,21 +133,21 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         self.descriptor.as_ref()
     }
 
-    pub fn get_digest(&self) -> Option<&Digest> {
+   /* pub fn get_digest(&self) -> Option<&Digest> {
         match &self.descriptor {
             Some(d) => Some(d.get_digest()),
             None => None,
         }
-    }
+    } */
 
     pub fn get_seqno(&self) -> SeqNo {
         self.seqno
     }
 
-    pub fn part_description(&self, pid: Vec<u8>) -> Option<&S::PartDescription> {
+    /*   pub fn part_description(&self, pid: &[u8]) -> Option<&S::PartDescription> {
         match self.descriptor() {
             Some(descriptor) => {
-                if let Some(part) = descriptor.parts().iter().find(|x| x.id() == &pid) {
+                if let Some(part) = descriptor.parts().iter().find(|x| x.id() == pid) {
                     Some(part)
                 } else {
                     None
@@ -162,16 +162,16 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             Some(descriptor) => Some(descriptor.sequence_number()),
             None => Some(SeqNo::ZERO),
         }
-    }
+    } */
 
-    fn read_local_part(&self, part_id: &Vec<u8>) -> Result<Option<ReadOnly<S::StatePart>>> {
+    fn read_local_part(&self, part_id: &[u8]) -> Result<Option<ReadOnly<S::StatePart>>> {
         let key: Vec<u8> = bincode::serialize(part_id).expect("failed to serialize");
 
         let res = self.parts.get("state", key)?;
 
         match res {
             Some(buf) => {
-                let res = bincode::deserialize::<ReadOnly<S::StatePart>>(buf.as_slice())
+                let res = bincode::deserialize::<ReadOnly<S::StatePart>>(&buf)
                     .wrapped(ErrorKind::CommunicationSerialize)
                     .expect("failed to deserialize part");
 
@@ -187,7 +187,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     fn write_parts(&self,parts: Vec<Arc<ReadOnly<S::StatePart>>>) -> Result<()>{ 
     
         let batch = parts.iter().map(|part| (
-            bincode::serialize(&part.id()).expect("failed to serialize"),
+            bincode::serialize(part.id()).expect("failed to serialize"),
             bincode::serialize(part.as_ref()).unwrap(),
         ));
 
@@ -199,8 +199,8 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
     pub fn get_parts(
         &self,
-        parts_desc: &Vec<S::PartDescription>,
-    ) -> Result<Vec<Arc<ReadOnly<S::StatePart>>>> {
+        parts_desc: &[S::PartDescription],
+    ) -> Result<Box<[Arc<ReadOnly<S::StatePart>>]>> {
         // need to figure out what to do if the part read doesn't match the descriptor 
         let mut vec = Vec::new();
         for part in parts_desc {
@@ -209,24 +209,28 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             }
         }
 
-        Ok(vec)
+        Ok(vec.into_boxed_slice())
     }
 
-    pub fn get_req_parts(&mut self) -> Vec<S::PartDescription> {
+    pub fn get_req_parts(&mut self) -> Vec<Arc<S::PartDescription>> {
         let parts = self.descriptor().unwrap().parts();
         let mut parts_to_req = Vec::new();
-        for part in parts {
+        for part in parts.iter() {
             if let Some(local_part) = self.read_local_part(part.id()).expect("failed to read part") {
-                if local_part.hash() == part.content_description() {
+                if local_part.hash().as_ref() == part.content_description() {
                     // We've confirmed that this part is valid so we don't need to request it
                     continue;
                 }
             }
 
-            parts_to_req.push(part.clone());
+            parts_to_req.push(part.clone().into());
         }
 
         parts_to_req
+    }
+
+    pub fn contains_part(&self, part: &S::PartDescription) -> bool {
+        self.req_parts.iter().find(|p| p.as_ref() == part).is_some()
     }
 
   /*  pub fn get_req_parts(&mut self) -> Vec<S::PartDescription> {
@@ -351,7 +355,7 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryState<S: DivisibleState> {
     seq: SeqNo,
-    pub st_frag: Vec<Arc<ReadOnly<S::StatePart>>>,
+    pub st_frag: Box<[Arc<ReadOnly<S::StatePart>>]>,
 }
 
 enum StStatus<S: DivisibleState> {
@@ -562,8 +566,7 @@ where
             StStatus::Running => (),
             StStatus::ReqLatestCid => self.request_latest_consensus_seq_no(view),
             StStatus::SeqNo(seq) => {
-
-                if self.checkpoint.get_seqno() < seq {
+                return if self.checkpoint.get_seqno() < seq {
                     println!(
                         "{:?} // Requesting state descriptor {:?}",
                         self.node.id(),
@@ -571,10 +574,10 @@ where
                     );
                     metric_duration_start(STATE_TRANSFER_TIME_ID);
                     self.request_state_descriptor(view);
-                    return Ok(STResult::StateTransferRunning);
+                    Ok(STResult::StateTransferRunning)
                 } else {
                     println!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.curr_seq, seq);
-                    return Ok(STResult::StateTransferNotNeeded(seq));
+                    Ok(STResult::StateTransferNotNeeded(seq))
                 }
             }
             StStatus::ReqState => self.request_latest_state_parts(view)?,
@@ -853,7 +856,10 @@ where
         .clone();
 
         let st_frag = match message.kind() {
-            MessageKind::ReqState(req_parts) => self.checkpoint.get_parts(req_parts).unwrap(),
+            MessageKind::ReqState(req_parts) => {
+                let parts = req_parts.iter().by_ref().as_slice();
+                self.checkpoint.get_parts(parts).unwrap()
+            },
             _ => {
                 return;
             }
@@ -1092,8 +1098,8 @@ where
                     let part_hash = received_part.hash();
                     if self
                         .checkpoint
-                        .req_parts.contains(received_part.descriptor())
-                        && received_part.descriptor().content_description() == part_hash
+                        .contains_part(received_part.descriptor())
+                        && received_part.descriptor().content_description() == part_hash.as_ref()
                     {                      
                         accepted_descriptor.push(received_part.descriptor().clone());
                         accepted_parts.push(received_part.clone());
@@ -1121,14 +1127,13 @@ where
 
                     self.checkpoint.targets.clear();
 
-                   if self.checkpoint.req_parts.is_empty() {
-
-                        return StStatus::StateComplete(state.seq);
+                    return if self.checkpoint.req_parts.is_empty() {
+                        StStatus::StateComplete(state.seq)
                     } else {
                         // We need to clear the descriptor in order to revert the state of the State transfer protocol to ReqLatestCid,
                         // where we assume our state is wrong, therefore out descriptor is wrong
                         self.checkpoint.descriptor = None;
-                        return StStatus::ReqLatestCid;
+                        StStatus::ReqLatestCid
                     }
                 }
 
@@ -1190,11 +1195,14 @@ where
         // Overloading the replicas
 
         let targets = &self.checkpoint.targets;
-        
-        let parts_map = split_evenly(&self.checkpoint.req_parts, targets.len());
+        let parts_map = split_evenly(&self.checkpoint.req_parts, targets.len()).map(|r| {
+            r.into_iter()
+                .map(|part| part.as_ref().clone())
+                .collect::<Vec<_>>()
+        });
 
-        for (p,n, ) in parts_map.zip(targets.iter()) {
-            let message = StMessage::new(cst_seq, MessageKind::ReqState(p.to_vec()));
+        for (p,n) in parts_map.zip(targets.iter()) {
+            let message = StMessage::new(cst_seq, MessageKind::ReqState(p.into_boxed_slice()));
 
             self.node.send(message, *n, false)?;
         }
@@ -1213,23 +1221,19 @@ where
 
         println!("START INSTALL STATE");
         let start_install = Instant::now();
-
-        let descriptors = if let Some(descriptor) = self.checkpoint.descriptor() {
+        if self.checkpoint.descriptor().is_none() {
+            panic!("No descriptor while installing state");
+        }
          // divide the state in parts, useful if the state is too large to keep in memory
 
             //descriptor.parts()
 
-            descriptor
-                .parts()
-                .chunks(INSTALL_CHUNK_SIZE)
-                .collect::<Vec<_>>() 
-        } else {
-            panic!("No Descriptor after state transfer??");
-        }; 
-
-        for state_desc in descriptors {
+           let descriptor = self.checkpoint.descriptor().unwrap().parts();
+           
+    
+        for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
-            let st_frag = self.checkpoint.get_parts(&state_desc.to_vec())?;
+            let st_frag = self.checkpoint.get_parts(state_desc)?;
             let parts: Vec<<S as DivisibleState>::StatePart> =
                 st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
 
