@@ -1,39 +1,39 @@
 export COMPILE=1
-export LOCAL=1
-export SINGLE_SERVER=1
+export LOCAL=0
+export SINGLE_SERVER=0
 
 export BACKEND=rust
 export VERBOSE=true
 export UPDATE_MAX_FDS=0
 
-export NUM_CLIENTS=2
-export CLIENT_GEN=20
+export NUM_CLIENTS=5
+export CLIENT_GEN=3000
 export NUM_REPLICAS=6
-export BATCH_SIZE=256
-export MAX_BATCH_SIZE=10000
-export CLIENTS_PER_POOL=50
+export BATCH_SIZE=5000
+export MAX_BATCH_SIZE=50000
+export CLIENTS_PER_POOL=1000
 
 #Global batch size from all joined client pools
 export GLOBAL_BATCH_SIZE=5000
-export GLOBAL_BATCH_SLEEP_MICROS=1000
+export GLOBAL_BATCH_SLEEP_MICROS=250
 
-export THREADPOOL_THREADS=4
-export ASYNC_THREADS=2
+export THREADPOOL_THREADS=12
+export ASYNC_THREADS=4
 
 export WATERMARK=1
 
-#1 ms batch timeout
-export BATCH_TIMEOUT_MICROS=1000
+#1 ms batch timeouts
+export BATCH_TIMEOUT_MICROS=100
 #1 ms sleep between client pool collections
-export BATCH_SLEEP_MICROS=1000
+export BATCH_SLEEP_MICROS=100
 
-export OPS_NUMBER=100000
-export CONCURRENT_RQS=4
+export OPS_NUMBER=5000000
+export CONCURRENT_RQS=50
 export MEASUREMENT_INTERVAL=1000
 
-export STATE_SIZE=24
-export REPLY_SIZE=48
-export REQUEST_SIZE=48
+export STATE_SIZE=56
+export REPLY_SIZE=56
+export REQUEST_SIZE=56
 export REQUEST_SLEEP_MILLIS=0
 
 export RUST_LOG=INFO
