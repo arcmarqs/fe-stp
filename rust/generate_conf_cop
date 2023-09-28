@@ -5,9 +5,9 @@ cd config || exit
 
 echo "$BATCH_SIZE" > batch.config
 
-REPLICAS=("10.0.10.1" "10.0.10.2" "10.0.10.3" "10.0.10.4")
+REPLICAS=("10.0.10.1" "10.0.10.2" "10.0.10.3" "10.0.10.4" "10.0.10.6" "10.0.10.8")
 
-#REPLICAS=("127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1")
+#REPLICAS=("127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1")
 
 #REPLICAS_SAFE_CLUSTER_IPS="127.0.0.1 127.0.0.1 127.0.0.1 127.0.0.1"
 
@@ -15,27 +15,27 @@ REPLICAS=("10.0.10.1" "10.0.10.2" "10.0.10.3" "10.0.10.4")
 #CLIENT_MACHINES="10.11.12.5 192.168.70.16"
 
 #1gbe
-CLIENT_MACHINES="127.0.0.1"
+CLIENT_MACHINES="10.0.10.5"
 #CLIENT_MACHINES=("10.0.10.5" "10.0.10.6" "10.0.10.7")
 
 #rm -f replicas.config
 
-#CURR_IP=0
-#for id in $(seq 0 $(expr "$NUM_REPLICAS" - 1)); do
-#    sni=srv${id}
-#    port=$(expr 10000 + "$id")
-#    rep_port=$(expr 12000 + "$id")
-#    host=$(expr "$id" % 4)
+CURR_IP=0
+for id in $(seq 0 $(expr "$NUM_REPLICAS" - 1)); do
+    sni=srv${id}
+    port=$(expr 10300 + "$id")
+    rep_port=$(expr 12300 + "$id")
+    host=$(expr "$id" % 4)
 
     #1gbe
     #host=$(expr 24 + $host)
     #echo $id $sni 192.168.85.$host $port $rep_port >> replicas.config
 
     #10gbe
-#    echo "$id" "$sni" "${REPLICAS[$CURR_IP]}" "$port" "$rep_port" >> replicas.config
+    echo "$id" "$sni" "${REPLICAS[$CURR_IP]}" "$port" "$rep_port" >> replicas.config
 
-#    CURR_IP=$(expr $CURR_IP + 1)
-#done
+    CURR_IP=$(expr $CURR_IP + 1)
+done
 
 if [[ ! -v MAX_CLIENTS ]]; then
   MAX_CLIENTS=$NUM_CLIENTS
