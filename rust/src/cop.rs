@@ -125,8 +125,6 @@ pub fn main() {
 
         generate_log(id);
 
-        generate_log(id);
-
         let conf = InitConfig {
             //If we are the client, we want to have many threads to send stuff to replicas
             threadpool_threads,
