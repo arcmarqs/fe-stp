@@ -1,4 +1,3 @@
-use std::clone;
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::{Weak, Arc};
@@ -8,6 +7,7 @@ use std::io::{Read, Write};
 use atlas_common::collections::HashMap;
 use atlas_execution::state::monolithic_state::MonolithicState;
 use serde::{Serialize, Deserialize, Deserializer};
+
 use konst::{
     primitive::{
         parse_usize,
@@ -28,21 +28,20 @@ pub struct KvData;
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Action {
-    Read(String),
-    Insert(String, HashMap<String,Vec<u8>>),
-    Remove(String)
+    Read(Vec<u8>),
+    Insert(Vec<u8>,Vec<u8>),
+    Remove(Vec<u8>)
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum Reply {
     None,
-    Single(HashMap<String,Vec<u8>>),
-    Multiple(Vec<HashMap<String,Vec<u8>>>),
+    Single(Vec<u8>),
 }
 
 #[derive(Clone,Serialize,Deserialize)]
 pub struct State {
-    pub db: BTreeMap<String,Vec<u8>>,
+    pub db: BTreeMap<Vec<u8>,Vec<u8>>,
 }
 
 impl State {
@@ -50,8 +49,6 @@ impl State {
         Self { db: BTreeMap::new() }
     }
 }
-
-
 
 impl MonolithicState for State {
     fn serialize_state<W>(mut w: W, request: &Self) -> Result<()> where W: Write {
@@ -61,7 +58,7 @@ impl MonolithicState for State {
 
     fn deserialize_state<R>(r: R) -> Result<Self> where R: Read, Self: Sized {
         let buf = r.bytes().map(|b| b.expect("failed to read byte")).collect::<Vec<_>>();
-        let state: BTreeMap<String, Vec<u8>> = bincode::deserialize(&buf).expect("Failed to deserialize");
+        let state: BTreeMap<Vec<u8>, Vec<u8>> = bincode::deserialize(&buf).expect("Failed to deserialize");
         Ok(State {db: state})
     }
 }

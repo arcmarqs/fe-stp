@@ -498,27 +498,29 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u in 0..100000 {
+    for u  in 0..1000000 as u32 {
 
-        let i = rand.gen_range(0..500);
+        let i : u64 = rand.gen_range(1..10000000);
 
-        let kv = format!("{}{}", id.0.to_string(), u.to_string());
+        let kv ={
+             let id = id.0.to_be_bytes().to_vec();
+             let rest = u.to_be_bytes().to_vec();
 
-        let mut map: HashMap<String,Vec<u8>> = HashMap::default();
+             [id,rest].concat()
+        };
+    
+        let request = Action::Insert(kv, i.to_be_bytes().to_vec());
 
-        map.insert(id.0.to_string(),kv.as_bytes().to_vec());
-
-        let request = Action::Insert(i.to_string(), map);
-        println!("{:?} // Sending req {:?}...", i.to_string(), request);
+        println!("{:?} // Sending req {:?}...", id, request);
 
         if let Ok(reply) = rt::block_on(concurrent_client.update::<Ordered>(Arc::from(request))) {
             println!("state: {:?}", reply);
         }
     }
 
-    for u in 0..400 {
+    for u in 0..100000 as u64 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
-        let request = {Action::Read(kv)};
+        let request = {Action::Read(kv.into_bytes())};
 
         println!("{:?} // Sending req {:?}...", id.0, request);
 
