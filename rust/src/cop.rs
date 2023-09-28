@@ -115,19 +115,15 @@ pub fn main() {
     )
     .unwrap();
 
-    let id: u32 = std::env::var("ID")
-        .iter()
-        .flat_map(|id| id.parse())
-        .next()
-        .unwrap();
+    let id: u32 = std::env::args()
+    .nth(1)
+    .expect("No replica specified")
+    .trim()
+    .parse()
+    .expect("Expected an integer");
 
     if !is_client {
-        let id: u32 = std::env::var("ID")
-            .iter()
-            .flat_map(|id| id.parse())
-            .next()
-            .unwrap();
-
+       
         generate_log(id);
 
         let conf = InitConfig {
@@ -203,17 +199,6 @@ fn main_(id: NodeId) {
 
     println!("Read keys.");
 
-    let replica_id: usize = std::env::args()
-    .nth(1)
-    .expect("No replica specified")
-    .trim()
-    .parse()
-    .expect("Expected an integer");
-
-    let replica = &replicas_config[replica_id];
-
-    let id = NodeId::from(replica.id);
-
     println!("Starting replica {:?}", id);
 
     let addrs = {
@@ -282,9 +267,9 @@ fn client_async_main() {
 
     let mut first_id: u32 = arg_vec.last().unwrap_or(&default).parse().unwrap();
 
-    //let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
+    let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
 
-    let client_count = 1;
+    //let client_count = 1;
 
     let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(clients_config.len())
