@@ -169,30 +169,30 @@ fn parse_entry(re: &Regex, line: &str) -> Option<ConfigEntry> {
     Some(ConfigEntry { id, rep_portno, hostname, ipaddr, portno })
 }
 
-/// Get the configuration for influx DB
+//// Get the configuration for influx DB
 pub fn influx_db_config(id: NodeId) -> InfluxDBArgs {
-   // let ip = std::env::var("INFLUX_IP").expect("INFLUX_IP not set");
-   // let db_name = std::env::var("INFLUX_DB_NAME").expect("INFLUX_DB_NAME not set");
-   // let user = std::env::var("INFLUX_USER").expect("INFLUX_USER not set");
-   // let password = std::env::var("INFLUX_PASSWORD").expect("INFLUX_PASSWORD not set");
-   let ip = "http://10.0.10.7:8886".into();
-   let db_name = "atlas".into();
-   let user = "admin".into();
-   let password = "tese2023".into();
-
-    let extra = std::env::var("INFLUX_EXTRA_TEST").unwrap_or("".to_string());
-
-    let extra = Some(format!("test-{}", extra));
-
-    InfluxDBArgs {
-        ip,
-        db_name,
-        user,
-        password,
-        node_id: id,
-        extra,
-    }
-}
+    // let ip = std::env::var("INFLUX_IP").expect("INFLUX_IP not set");
+    // let db_name = std::env::var("INFLUX_DB_NAME").expect("INFLUX_DB_NAME not set");
+    // let user = std::env::var("INFLUX_USER").expect("INFLUX_USER not set");
+    // let password = std::env::var("INFLUX_PASSWORD").expect("INFLUX_PASSWORD not set");
+    let ip = "http://10.0.10.7:8886".into();
+    let db_name = "atlas".into();
+    let user = "admin".into();
+    let password = "tese2023".into();
+ 
+     let extra = std::env::var("INFLUX_EXTRA_TEST").unwrap_or("".to_string());
+ 
+     let extra = Some(format!("test-{}", extra));
+ 
+     InfluxDBArgs {
+         ip,
+         db_name,
+         user,
+         password,
+         node_id: id,
+         extra,
+     }
+ }
 
 const BOOSTRAP_NODES: [u32; 4] = [0, 1, 2, 3];
 
