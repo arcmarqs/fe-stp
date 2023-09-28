@@ -259,13 +259,7 @@ fn client_async_main() {
     let clients_config = parse_config("./config/clients.config").unwrap();
     let replicas_config = parse_config("./config/replicas.config").unwrap();
 
-    let arg_vec: Vec<String> = args().collect();
-
-    let default = String::from("1000");
-
-    println!("arg_vec: {:?}", arg_vec);
-
-    let mut first_id: u32 = arg_vec.last().unwrap_or(&default).parse().unwrap();
+    let first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
 
     let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
 
