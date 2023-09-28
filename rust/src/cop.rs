@@ -100,21 +100,26 @@ fn generate_log(id: u32) {
 }
 
 pub fn main() {
-    let is_client = std::env::var("CLIENT")
-        .map(|x| x == "1")
-        .unwrap_or(false);
+    let is_client = std::env::var("CLIENT").map(|x| x == "1").unwrap_or(false);
 
-    let threadpool_threads = parse_usize(std::env::var("THREADPOOL_THREADS")
-        .unwrap_or(String::from("2")).as_str()).unwrap();
-    let async_threads = parse_usize(std::env::var("ASYNC_THREADS")
-        .unwrap_or(String::from("2")).as_str()).unwrap();
+    let threadpool_threads = parse_usize(
+        std::env::var("THREADPOOL_THREADS")
+            .unwrap_or(String::from("2"))
+            .as_str(),
+    )
+    .unwrap();
+    let async_threads = parse_usize(
+        std::env::var("ASYNC_THREADS")
+            .unwrap_or(String::from("2"))
+            .as_str(),
+    )
+    .unwrap();
 
     let id: u32 = std::env::var("ID")
         .iter()
         .flat_map(|id| id.parse())
         .next()
         .unwrap();
-
 
     if !is_client {
         let id: u32 = std::env::var("ID")
@@ -136,14 +141,19 @@ pub fn main() {
         let _guard = unsafe { init(conf).unwrap() };
         let node_id = NodeId::from(id);
 
-       // atlas_metrics::initialize_metrics(vec![with_metrics(febft_pbft_consensus::bft::metric::metrics()),
-       //                                        with_metrics(atlas_core::metric::metrics()),
-       //                                        with_metrics(atlas_communication::metric::metrics()),
-       //                                        with_metrics(atlas_replica::metric::metrics()),
-       //                                        with_metrics(atlas_log_transfer::metrics::metrics()),
-       //                                        with_metrics(atlas_divisible_state::metrics::metrics()),
-    //                                       with_metric_level(MetricLevel::Trace)],
-     //                                     influx_db_config(node_id));
+        atlas_metrics::initialize_metrics(
+            vec![
+                with_metrics(febft_pbft_consensus::bft::metric::metrics()),
+                with_metrics(atlas_core::metric::metrics()),
+                with_metrics(atlas_communication::metric::metrics()),
+                with_metrics(atlas_replica::metric::metrics()),
+                with_metrics(atlas_log_transfer::metrics::metrics()),
+                with_metrics(atlas_divisible_state::metrics::metrics()),
+                with_metrics(super::stp::metrics::metrics()),
+                with_metric_level(MetricLevel::Info),
+            ],
+            influx_db_config(node_id),
+        );
 
         main_(node_id);
     } else {
@@ -157,12 +167,19 @@ pub fn main() {
 
         let _guard = unsafe { init(conf).unwrap() };
 
-        let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
+        let mut first_id: u32 = env::var("ID")
+            .unwrap_or(String::from("1000"))
+            .parse()
+            .unwrap();
 
-     //   atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
-     //                                         with_metrics(atlas_client::metric::metrics()),
-     //                                          with_metric_level(MetricLevel::Info)],
-     //                                     influx_db_config(NodeId::from(first_id)));
+        atlas_metrics::initialize_metrics(
+            vec![
+                with_metrics(atlas_communication::metric::metrics()),
+                with_metrics(atlas_client::metric::metrics()),
+                with_metric_level(MetricLevel::Info),
+            ],
+            influx_db_config(NodeId::from(first_id)),
+        );
 
         client_async_main();
     }
@@ -343,7 +360,7 @@ fn client_async_main() {
     for client in clients {
         let id = client.id();
 
-       // generate_log(id.0);
+        generate_log(id.0);
 
         let h = std::thread::Builder::new()
             .name(format!("Client {:?}", client.id()))
@@ -352,7 +369,7 @@ fn client_async_main() {
 
         handles.push(h);
 
-        // Delay::new(Duration::from_millis(5)).await;
+        //Delay::new(Duration::from_millis(5)).await;
     }
 
     drop(clients_config);
@@ -378,7 +395,7 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..1000000 as u32 {
 
-        let i : u128 = rand.gen_range(1..10000000);
+        let i : u64 = rand.gen_range(1..10000000);
 
         let kv ={
              let id = id.0.to_be_bytes().to_vec();

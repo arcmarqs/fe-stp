@@ -229,9 +229,8 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }
 
     pub fn get_req_parts(&mut self) -> Vec<Arc<S::PartDescription>> {
-        let parts = self.descriptor().unwrap().parts();
         let mut parts_to_req = Vec::new();
-        for part in parts {
+        for part in  self.descriptor().unwrap().parts().iter() {
             if let Some(local_part) = self.read_local_part(part.id()).expect("failed to read part") {
                 if local_part.hash().as_ref() == part.content_description() {
                     // We've confirmed that this part is valid so we don't need to request it
@@ -760,11 +759,11 @@ where
     fn process_request_seq(&mut self, header: Header, message: StMessage<S>) {
         let seq = match &self.checkpoint.descriptor {
             Some(descriptor) => {
-                Some((self.checkpoint.get_seqno(),descriptor.get_digest().clone()))
+                Some((self.checkpoint.get_seqno(),descriptor.get_digest().unwrap()))
             }
             None => {
                 // We have received no state updates from the app so we have no descriptor
-                Some((SeqNo::ZERO,Digest::blank()))
+                Some((SeqNo::ZERO, Digest::blank()))
             }
         };
 
@@ -1054,7 +1053,7 @@ where
                     None => return StStatus::Running,
                 };
 
-                let desc_digest = descriptor.1.get_digest().clone();
+                let desc_digest = descriptor.1.get_digest().unwrap();
 
                 if let Some(voters) = self.received_state_ids.get_mut(&(descriptor.0,desc_digest)) {
                     if !voters.contains(&header.from()) {

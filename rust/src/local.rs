@@ -151,15 +151,15 @@ pub fn main() {
             let _guard = unsafe { init(conf).unwrap() };
             let node_id = NodeId::from(id);
 
-        //     atlas_metrics::initialize_metrics(vec![with_metrics(febft_pbft_consensus::bft::metric::metrics()),
-        //    with_metrics(atlas_core::metric::metrics()),
-        //    with_metrics(atlas_communication::metric::metrics()),
-       //     with_metrics(atlas_replica::metric::metrics()),
-       //     with_metrics(atlas_log_transfer::metrics::metrics()),
-       //     with_metrics(atlas_divisible_state::metrics::metrics()),
-       //     with_metrics(super::stp::metrics::metrics()),
-       //     with_metric_level(MetricLevel::Info)],
-       //influx_db_config(node_id));
+            atlas_metrics::initialize_metrics(vec![with_metrics(febft_pbft_consensus::bft::metric::metrics()),
+            with_metrics(atlas_core::metric::metrics()),
+            with_metrics(atlas_communication::metric::metrics()),
+            with_metrics(atlas_replica::metric::metrics()),
+            with_metrics(atlas_log_transfer::metrics::metrics()),
+            with_metrics(atlas_divisible_state::metrics::metrics()),
+            with_metrics(super::stp::metrics::metrics()),
+            with_metric_level(MetricLevel::Info)],
+       influx_db_config(node_id));
 
             if !single_server {
             main_();
@@ -180,10 +180,10 @@ pub fn main() {
         let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
 
       
-     //   atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
-     //   with_metrics(atlas_client::metric::metrics()),
-     //   with_metric_level(MetricLevel::Info)],
-   //influx_db_config(NodeId::from(first_id)));   
+        atlas_metrics::initialize_metrics(vec![with_metrics(atlas_communication::metric::metrics()),
+        with_metrics(atlas_client::metric::metrics()),
+        with_metric_level(MetricLevel::Info)],
+        influx_db_config(NodeId::from(first_id)));   
 
         client_async_main();
     }
@@ -501,7 +501,7 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..1000000 as u32 {
 
-        let i : u128 = rand.gen_range(1..10000000);
+        let i : u64 = rand.gen_range(1..10000000);
 
         let kv ={
              let id = id.0.to_be_bytes().to_vec();
