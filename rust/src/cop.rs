@@ -285,7 +285,7 @@ fn client_async_main() {
     for i in 0..client_count {
         let id = NodeId::from(first_id + i);
 
-        generate_log(id.0 as u32);
+        //generate_log(id.0 );
 
         let addrs = {
             let mut addrs = IntMap::new();
