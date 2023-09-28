@@ -274,9 +274,17 @@ fn client_async_main() {
     let clients_config = parse_config("./config/clients.config").unwrap();
     let replicas_config = parse_config("./config/replicas.config").unwrap();
 
-    let mut first_id: u32 = env::var("ID").unwrap_or(String::from("1000")).parse().unwrap();
+    let arg_vec: Vec<String> = args().collect();
 
-    let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
+    let default = String::from("1000");
+
+    println!("arg_vec: {:?}", arg_vec);
+
+    let mut first_id: u32 = arg_vec.last().unwrap_or(&default).parse().unwrap();
+
+    //let client_count: u32 = env::var("NUM_CLIENTS").unwrap_or(String::from("1")).parse().unwrap();
+
+    let client_count = 1;
 
     let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(clients_config.len())
@@ -292,14 +300,17 @@ fn client_async_main() {
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    let (tx, mut rx) = channel::new_bounded_async(clients_config.len());
+    let (tx, mut rx) = channel::new_bounded_async(8);
+
+    let comm_stats = None;
 
     for i in 0..client_count {
-        let id = NodeId::from(i + first_id);
+        let id = NodeId::from(first_id + i);
+
+        generate_log(id.0 as u32);
 
         let addrs = {
             let mut addrs = IntMap::new();
-
             for replica in &replicas_config {
                 let id = NodeId::from(replica.id);
                 let addr = format!("{}:{}", replica.ipaddr, replica.portno);
@@ -324,19 +335,19 @@ fn client_async_main() {
         };
 
         let sk = secret_keys.remove(id.into()).unwrap();
-
         let fut = setup_client(
             replicas_config.len(),
             id,
             sk,
             addrs,
             public_keys.clone(),
-            None
+            comm_stats.clone(),
         );
 
         let mut tx = tx.clone();
-
         rt::spawn(async move {
+            //We can have this async initializer no problem, just don't want it to be used to actually send
+            //The requests/control the clients
             println!("Bootstrapping client #{}", u32::from(id));
             let client = fut.await.unwrap();
             println!("Done bootstrapping client #{}", u32::from(id));
@@ -352,15 +363,13 @@ fn client_async_main() {
         clients.push(rt::block_on(rx.recv()).unwrap());
     }
 
-    //We have all the clients, start the OS resource monitoring thread
-    //crate::os_statistics::start_statistics_thread(NodeId(first_cli));
-
     let mut handles = Vec::with_capacity(client_count as usize);
+
+    // Get one client to run on this thread
+    let our_client = clients.pop();
 
     for client in clients {
         let id = client.id();
-
-        generate_log(id.0);
 
         let h = std::thread::Builder::new()
             .name(format!("Client {:?}", client.id()))
@@ -368,11 +377,11 @@ fn client_async_main() {
             .expect(format!("Failed to start thread for client {:?} ", &id.id()).as_str());
 
         handles.push(h);
-
-        //Delay::new(Duration::from_millis(5)).await;
     }
 
     drop(clients_config);
+
+    run_client(our_client.unwrap());
 
     for h in handles {
         let _ = h.join();
