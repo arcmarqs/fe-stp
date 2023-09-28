@@ -115,15 +115,14 @@ pub fn main() {
     )
     .unwrap();
 
-    let id: u32 = std::env::args()
-    .nth(1)
-    .expect("No replica specified")
-    .trim()
-    .parse()
-    .expect("Expected an integer");
-
     if !is_client {
-       
+        let id: u32 = std::env::args()
+            .nth(1)
+            .expect("No replica specified")
+            .trim()
+            .parse()
+            .expect("Expected an integer");
+
         generate_log(id);
 
         let conf = InitConfig {
@@ -163,7 +162,7 @@ pub fn main() {
 
         let _guard = unsafe { init(conf).unwrap() };
 
-        let mut first_id: u32 = env::var("ID")
+        let first_id: u32 = env::var("ID")
             .unwrap_or(String::from("1000"))
             .parse()
             .unwrap();
