@@ -21,7 +21,7 @@ export THREADPOOL_THREADS=12
 export MIO_WORKER_COUNT=1
 export ASYNC_THREADS=4
 
-export WATERMARK=1
+export WATERMARK=100
 
 #1 ms batch timeouts
 export BATCH_TIMEOUT_MICROS=100
