@@ -65,7 +65,6 @@ impl ApplicationData for KvData{
             let _data = request_msg.get_action().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get data")?;
             let action : Action = bincode::deserialize(_data).wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get data")?;
             Ok(Arc::new(action))
-        
     }
 
     fn serialize_reply<W>(w: W, reply: &Self::Reply) -> Result<()> where W: Write {
