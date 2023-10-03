@@ -15,6 +15,11 @@ pub const CHECKPOINT_UPDATE_TIME_ID : usize = 602;
 pub const PROCESS_REQ_STATE_TIME : &str = "PROCESS_REQ_STATE_TIME";
 pub const PROCESS_REQ_STATE_TIME_ID : usize = 603;
 
+pub const TOTAL_STATE_TRANSFERED : &str = "TOTAL_STATE_TRANSFERED";
+pub const TOTAL_STATE_TRANSFERED_ID : usize = 604;
+
+pub const TOTAL_STATE_INSTALLED : &str = "TOTAL_STATE_TRANSFERED";
+pub const TOTAL_STATE_INSTALLED_ID : usize = 605;
 
 
 
@@ -24,6 +29,7 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (STATE_TRANSFER_TIME_ID, STATE_TRANSFER_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
         (CHECKPOINT_UPDATE_TIME_ID, CHECKPOINT_UPDATE_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
         (PROCESS_REQ_STATE_TIME_ID, PROCESS_REQ_STATE_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
-
+        (TOTAL_STATE_TRANSFERED_ID, TOTAL_STATE_TRANSFERED.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
+        (TOTAL_STATE_INSTALLED_ID, TOTAL_STATE_INSTALLED.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
     ]
 }

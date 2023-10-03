@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Binary};
 use std::fs::{self, OpenOptions};
 use std::io::{prelude::*, Write};
+use std::mem;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
@@ -39,8 +40,8 @@ use atlas_core::persistent_log::{
 use atlas_core::state_transfer::divisible_state::*;
 use atlas_core::state_transfer::{CstM, STResult, STTimeoutResult, StateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use atlas_metrics::metrics::{metric_duration, metric_duration_start, metric_duration_end};
-use crate::stp::metrics::{CHECKPOINT_UPDATE_TIME_ID,PROCESS_REQ_STATE_TIME_ID,STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,STATE_TRANSFER_TIME_ID};
+use atlas_metrics::metrics::{metric_duration, metric_duration_start, metric_duration_end, metric_increment, metric_store_count};
+use crate::stp::metrics::{CHECKPOINT_UPDATE_TIME_ID,PROCESS_REQ_STATE_TIME_ID,STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,STATE_TRANSFER_TIME_ID, TOTAL_STATE_INSTALLED_ID, TOTAL_STATE_TRANSFERED_ID};
 use crate::stp::message::MessageKind;
 
 use self::message::serialize::STMsg;
@@ -50,7 +51,7 @@ pub mod message;
 pub mod metrics;
 
 //HOW MANY STATE PARTS TO INSTALL AT ONCE
-const INSTALL_CHUNK_SIZE: usize = 128;
+const INSTALL_CHUNK_SIZE: usize = 1024;
 
 // Split a slice into n slices, modified from https://users.rust-lang.org/t/how-to-split-a-slice-into-n-chunks/40008/5
 fn split_evenly<T>(slice: &[T], n: usize) -> impl Iterator<Item = &[T]> {
@@ -133,46 +134,19 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn descriptor(&self) -> Option<&S::StateDescriptor> {
         self.descriptor.as_ref()
     }
-
-   /* pub fn get_digest(&self) -> Option<&Digest> {
-        match &self.descriptor {
-            Some(d) => Some(d.get_digest()),
-            None => None,
-        }
-    } */
-
+    
     pub fn get_seqno(&self) -> SeqNo {
         self.seqno
     }
 
-    /*   pub fn part_description(&self, pid: &[u8]) -> Option<&S::PartDescription> {
-        match self.descriptor() {
-            Some(descriptor) => {
-                if let Some(part) = descriptor.parts().iter().find(|x| x.id() == pid) {
-                    Some(part)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    }
-
-    pub fn get_descriptor_seqno(&self) -> Option<SeqNo> {
-        match &self.descriptor {
-            Some(descriptor) => Some(descriptor.sequence_number()),
-            None => Some(SeqNo::ZERO),
-        }
-    } */
-
-    fn read_local_part(&self, part_id: &[u8]) -> Result<Option<ReadOnly<S::StatePart>>> {
+    fn read_local_part(&self, part_id: &[u8]) -> Result<Option<S::StatePart>> {
         let key: Vec<u8> = bincode::serialize(part_id).expect("failed to serialize");
 
         let res = self.parts.get("state", key)?;
 
         match res {
             Some(buf) => {
-                let res = bincode::deserialize::<ReadOnly<S::StatePart>>(&buf)
+                let res = bincode::deserialize::<S::StatePart>(&buf)
                     .wrapped(ErrorKind::CommunicationSerialize)
                     .expect("failed to deserialize part");
 
@@ -185,11 +159,11 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         }
     }
 
-    fn write_parts(&self,parts: Vec<Arc<ReadOnly<S::StatePart>>>) -> Result<()>{ 
+    fn write_parts(&self,parts: Box<[S::StatePart]>) -> Result<()>{ 
     
         let batch = parts.iter().map(|part| (
             bincode::serialize(part.id()).expect("failed to serialize"),
-            bincode::serialize(part.as_ref()).unwrap(),
+            bincode::serialize(part).unwrap(),
         ));
 
         let _ = self.parts.set_all("state", batch);
@@ -201,12 +175,12 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn get_parts(
         &self,
         parts_desc: &[S::PartDescription],
-    ) -> Result<Box<[Arc<ReadOnly<S::StatePart>>]>> {
+    ) -> Result<Box<[S::StatePart]>> {
         // need to figure out what to do if the part read doesn't match the descriptor 
         let mut vec = Vec::new();
         for part in parts_desc {
             if let Some(p) = self.read_local_part(part.id())? {
-                vec.push(Arc::new(p));
+                vec.push(p);
             }
         }
 
@@ -216,16 +190,16 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     pub fn get_parts_by_ref(
         &self,
         parts_desc: &[Arc<S::PartDescription>],
-    ) -> Result<Box<[Arc<ReadOnly<S::StatePart>>]>> {
+    ) -> Result<Vec<S::StatePart>> {
         // need to figure out what to do if the part read doesn't match the descriptor 
         let mut vec = Vec::new();
         for part in parts_desc {
             if let Some(p) = self.read_local_part(part.id())? {
-                vec.push(Arc::new(p));
+                vec.push(p);
             }
         }
 
-        Ok(vec.into_boxed_slice())
+        Ok(vec)
     }
 
     pub fn get_req_parts(&mut self) -> Vec<Arc<S::PartDescription>> {
@@ -370,7 +344,7 @@ impl<S: DivisibleState> Debug for ProtoPhase<S> {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryState<S: DivisibleState> {
     seq: SeqNo,
-    pub st_frag: Box<[Arc<ReadOnly<S::StatePart>>]>,
+    pub st_frag: Box<[S::StatePart]>,
 }
 
 enum StStatus<S: DivisibleState> {
@@ -595,7 +569,11 @@ where
                     Ok(STResult::StateTransferNotNeeded(seq))
                 }
             }
-            StStatus::ReqState => self.request_latest_state_parts(view)?,
+            StStatus::ReqState => {
+                metric_store_count(TOTAL_STATE_TRANSFERED_ID, 0);
+
+                self.request_latest_state_parts(view)?;
+            },
             StStatus::RequestStateDescriptor => self.request_state_descriptor(view),
             StStatus::StateDescriptor(descriptor) => {
                 let my_descriptor = self.checkpoint.descriptor();
@@ -1109,13 +1087,17 @@ where
 
                 let mut accepted_descriptor = Vec::new();
                 let mut accepted_parts = Vec::new();
+                println!("state transfer size {:?}",  state.st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>());
+
                 for received_part in state.st_frag.iter() {
+                    metric_increment(TOTAL_STATE_TRANSFERED_ID, Some(mem::size_of_val(&received_part.bytes()) as u64));
+
                     let part_hash = received_part.hash();
                     if self
                         .checkpoint
                         .contains_part(received_part.descriptor())
                         && received_part.descriptor().content_description() == part_hash.as_ref()
-                    {                      
+                    {                    
                         accepted_descriptor.push(received_part.descriptor().clone());
                         accepted_parts.push(received_part.clone());
                     } else {
@@ -1124,7 +1106,7 @@ where
                     }
                 }
 
-                let _ = self.checkpoint.write_parts(accepted_parts);
+                let _ = self.checkpoint.write_parts(accepted_parts.into_boxed_slice());
 
                 let i = i + 1;
 
@@ -1233,6 +1215,7 @@ where
 
     fn install_state(&mut self) -> Result<STResult> {
         println!("START INSTALL STATE");
+        metric_store_count(TOTAL_STATE_INSTALLED_ID, 0);
         let start_install = Instant::now();
         if self.checkpoint.descriptor().is_none() {
             panic!("No descriptor while installing state");
@@ -1251,13 +1234,15 @@ where
         for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
             let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
-            let parts: Vec<<S as DivisibleState>::StatePart> =
-                st_frag.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
+            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>()));
+
+            println!("state install size {:?}", st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>());
 
             self.install_channel
-                .send(InstallStateMessage::StatePart(parts))
+                .send(InstallStateMessage::StatePart(st_frag.into_boxed_slice()))
                 .unwrap();
         }
+
 
         self.checkpoint.seqno = self.largest_cid;
 
@@ -1335,9 +1320,7 @@ where
             self.checkpoint.seqno = seq_no;
         
 
-            let parts = state.iter().map(|p| Arc::new(ReadOnly::new(p.clone()))).collect::<Vec<_>>();
-
-            self.checkpoint.write_parts(parts)?;
+            self.checkpoint.write_parts(state.into_boxed_slice())?;
 
             self.checkpoint.update_descriptor(descriptor);
 
