@@ -1234,9 +1234,9 @@ where
         for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
             let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
-            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>()));
+            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| mem::size_of_val(f.bytes()) as u64).sum::<u64>()));
 
-            println!("state install size {:?}", st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>());
+            println!("state install size {:?}", st_frag.iter().map(|f| mem::size_of_val(f.bytes()) as u64).sum::<u64>());
 
             self.install_channel
                 .send(InstallStateMessage::StatePart(st_frag.into_boxed_slice()))
