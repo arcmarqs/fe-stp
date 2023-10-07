@@ -51,7 +51,7 @@ pub mod message;
 pub mod metrics;
 
 //HOW MANY STATE PARTS TO INSTALL AT ONCE
-const INSTALL_CHUNK_SIZE: usize = 1024;
+const INSTALL_CHUNK_SIZE: usize = 5000;
 
 // Split a slice into n slices, modified from https://users.rust-lang.org/t/how-to-split-a-slice-into-n-chunks/40008/5
 fn split_evenly<T>(slice: &[T], n: usize) -> impl Iterator<Item = &[T]> {
@@ -1234,7 +1234,7 @@ where
         for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
             let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
-            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| mem::size_of_val(f.bytes()) as u64).sum::<u64>()));
+            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>()));
 
             println!("state install size {:?}", st_frag.iter().map(|f| mem::size_of_val(f.bytes()) as u64).sum::<u64>());
 
