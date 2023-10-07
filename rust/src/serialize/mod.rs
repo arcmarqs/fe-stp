@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::mem::size_of;
+use std::mem::{size_of, self};
 use std::sync::{Weak, Arc};
 use std::time::Duration;
 use std::default::Default;
@@ -60,6 +60,10 @@ impl MonolithicState for State {
         let buf = r.bytes().map(|b| b.expect("failed to read byte")).collect::<Vec<_>>();
         let state: BTreeMap<Vec<u8>, Vec<u8>> = bincode::deserialize(&buf).expect("Failed to deserialize");
         Ok(State {db: state})
+    }
+
+    fn size(&self) -> usize {
+        self.db.iter().map(|(k,v)| (k.len() + v.len())).sum::<usize>()
     }
 }
 

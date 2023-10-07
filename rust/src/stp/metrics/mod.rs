@@ -24,6 +24,5 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (STATE_TRANSFER_TIME_ID, STATE_TRANSFER_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
         (CHECKPOINT_UPDATE_TIME_ID, CHECKPOINT_UPDATE_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
         (PROCESS_REQ_STATE_TIME_ID, PROCESS_REQ_STATE_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
-
     ]
 }
