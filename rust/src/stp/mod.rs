@@ -51,7 +51,7 @@ pub mod message;
 pub mod metrics;
 
 //HOW MANY STATE PARTS TO INSTALL AT ONCE
-const INSTALL_CHUNK_SIZE: usize = 5000;
+const INSTALL_CHUNK_SIZE: usize = 2048;
 
 // Split a slice into n slices, modified from https://users.rust-lang.org/t/how-to-split-a-slice-into-n-chunks/40008/5
 fn split_evenly<T>(slice: &[T], n: usize) -> impl Iterator<Item = &[T]> {
@@ -1087,10 +1087,10 @@ where
 
                 let mut accepted_descriptor = Vec::new();
                 let mut accepted_parts = Vec::new();
-                println!("state transfer size {:?}",  state.st_frag.iter().map(|f| mem::size_of_val(*&(&f).bytes()) as u64).sum::<u64>());
+                println!("state transfer size {:?}",  state.st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>());
 
                 for received_part in state.st_frag.iter() {
-                    metric_increment(TOTAL_STATE_TRANSFERED_ID, Some(mem::size_of_val(&received_part.bytes()) as u64));
+                    metric_increment(TOTAL_STATE_TRANSFERED_ID, Some(received_part.bytes().len() as u64));
 
                     let part_hash = received_part.hash();
                     if self
