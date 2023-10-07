@@ -360,7 +360,7 @@ pub async fn setup_replica(
 
     let view = ViewInfo::new(SeqNo::ZERO, n, 1)?;
 
-    let timeout_duration = Duration::from_secs(3);
+    let timeout_duration = Duration::from_secs(30);
 
     let watermark = get_watermark();
 
