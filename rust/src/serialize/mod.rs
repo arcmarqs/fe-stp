@@ -46,7 +46,8 @@ pub struct State {
 
 impl State {
     pub fn new() -> Self {
-        Self { db: BTreeMap::new() }
+        Self { db: BTreeMap::new()
+    }
     }
 }
 
@@ -63,7 +64,7 @@ impl MonolithicState for State {
     }
 
     fn size(&self) -> usize {
-        self.db.iter().map(|(k,v)| (k.len() + v.len())).sum::<usize>()
+        bincode::serialized_size(&self).unwrap() as usize
     }
 }
 
