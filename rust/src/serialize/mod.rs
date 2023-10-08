@@ -64,7 +64,9 @@ impl MonolithicState for State {
     }
 
     fn size(&self) -> usize {
-        bincode::serialized_size(&self).unwrap() as usize
+        let first = self.db.first_key_value().map(|(key,value)| key.len() + value.len()).expect("failed sum");
+
+        self.db.len() * first
     }
 }
 
