@@ -16,7 +16,6 @@ use atlas_common::persistentdb::KVDB;
 use atlas_core::ordering_protocol::ExecutionResult;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
-use atlas_divisible_state::metrics::TOTAL_STATE_SIZE;
 use atlas_divisible_state::state_tree::{LeafNode, StateTree};
 use atlas_divisible_state::SerializedTree;
 use atlas_execution::state::divisible_state::{
@@ -47,6 +46,7 @@ use crate::stp::message::MessageKind;
 
 use self::message::serialize::STMsg;
 use self::message::StMessage;
+use self::metrics::{TOTAL_STATE_SIZE, TOTAL_STATE_SIZE_ID};
 
 pub mod message;
 pub mod metrics;
@@ -177,7 +177,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
         let _ = self.parts.set_all("state", batch);
         
-        metric_increment(TOTAL_STATE_SIZE, Some(self.parts.size()));
+        metric_increment(TOTAL_STATE_SIZE_ID, Some(self.parts.size()));
 
         Ok(())
     }
