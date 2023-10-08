@@ -90,7 +90,7 @@ struct PersistentCheckpoint<S: DivisibleState> {
     targets: Vec<NodeId>,
     // used to track the state part's position in the persistent checkpoint
     // K = pageId V= Length
-    pub parts: KVDB,
+    parts: KVDB,
     // list of parts we need in order to recover the state
     req_parts: Vec<Arc<S::PartDescription>>,
 }
@@ -137,6 +137,11 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     
     pub fn get_seqno(&self) -> SeqNo {
         self.seqno
+    }
+
+    pub fn clear(&mut self) {
+        self.req_parts = Vec::new();
+        self.targets = Vec::new();
     }
 
     fn read_local_part(&self, part_id: &[u8]) -> Result<Option<S::StatePart>> {
@@ -1216,13 +1221,14 @@ where
     fn install_state(&mut self) -> Result<STResult> {
         println!("START INSTALL STATE");
         metric_store_count(TOTAL_STATE_INSTALLED_ID, 0);
-        let start_install = Instant::now();
         if self.checkpoint.descriptor().is_none() {
             panic!("No descriptor while installing state");
         }
          // divide the state in parts, useful if the state is too large to keep in memory
 
             //descriptor.parts()
+
+        let start_install = Instant::now();
 
         let descriptor= self
             .checkpoint
@@ -1236,7 +1242,7 @@ where
             let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
             metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>()));
 
-            println!("state install size {:?}", st_frag.iter().map(|f| mem::size_of_val(f.bytes()) as u64).sum::<u64>());
+            //println!("state install size {:?}", st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>());
 
             self.install_channel
                 .send(InstallStateMessage::StatePart(st_frag.into_boxed_slice()))
@@ -1250,13 +1256,16 @@ where
             .send(InstallStateMessage::Done)
             .unwrap();
 
-        println!("state transfer finished {:?}", start_install.elapsed());
 
         metric_duration(
             STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,
             start_install.elapsed(),
         );
         metric_duration_end(STATE_TRANSFER_TIME_ID);
+        println!("state transfer finished {:?}", start_install.elapsed());
+
+        self.checkpoint.clear();
+        self.received_state_ids.clear();
 
         Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()))
     }
