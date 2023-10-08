@@ -16,6 +16,7 @@ use atlas_common::persistentdb::KVDB;
 use atlas_core::ordering_protocol::ExecutionResult;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
+use atlas_divisible_state::metrics::TOTAL_STATE_SIZE;
 use atlas_divisible_state::state_tree::{LeafNode, StateTree};
 use atlas_divisible_state::SerializedTree;
 use atlas_execution::state::divisible_state::{
@@ -93,6 +94,7 @@ struct PersistentCheckpoint<S: DivisibleState> {
     parts: KVDB,
     // list of parts we need in order to recover the state
     req_parts: Vec<Arc<S::PartDescription>>,
+    size: usize,
 }
 
 impl<S: DivisibleState> Debug for PersistentCheckpoint<S> {
@@ -115,6 +117,7 @@ impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
             req_parts: Default::default(),
             targets: vec![],
             parts: KVDB::new("checkpoint",vec!["state"]).unwrap(),
+            size: 0,
         }
     }
 }
@@ -128,6 +131,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             descriptor: None,
             targets: vec![],
             parts: KVDB::new(path,vec!["state"]).unwrap(),
+            size: 0,
         }
     }
 
@@ -165,7 +169,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
     }
 
     fn write_parts(&self,parts: Box<[S::StatePart]>) -> Result<()>{ 
-    
+        
         let batch = parts.iter().map(|part| (
             bincode::serialize(part.id()).expect("failed to serialize"),
             bincode::serialize(part).unwrap(),
@@ -173,6 +177,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
         let _ = self.parts.set_all("state", batch);
         
+        metric_increment(TOTAL_STATE_SIZE, Some(self.parts.size()));
 
         Ok(())
     }

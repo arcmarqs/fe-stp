@@ -21,6 +21,8 @@ pub const TOTAL_STATE_TRANSFERED_ID : usize = 604;
 pub const TOTAL_STATE_INSTALLED : &str = "TOTAL_STATE_INSTALLED";
 pub const TOTAL_STATE_INSTALLED_ID : usize = 605;
 
+pub const TOTAL_STATE_SIZE: &str = "TOTAL_STATE_SIZE";
+pub const TOTAL_STATE_SIZE_ID: usize = 801;
 
 
 pub fn metrics() -> Vec<MetricRegistry> {
@@ -31,5 +33,7 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (PROCESS_REQ_STATE_TIME_ID, PROCESS_REQ_STATE_TIME.to_string(), MetricKind::Duration, MetricLevel::Info).into(),
         (TOTAL_STATE_TRANSFERED_ID, TOTAL_STATE_TRANSFERED.to_string(), MetricKind::Counter, MetricLevel::Info).into(),
         (TOTAL_STATE_INSTALLED_ID, TOTAL_STATE_INSTALLED.to_string(), MetricKind::Counter, MetricLevel::Info).into(),
+        (TOTAL_STATE_SIZE_ID, TOTAL_STATE_SIZE.to_string(), MetricKind::Counter, MetricLevel::Info).into(),
+
     ]
 }
