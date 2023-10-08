@@ -46,7 +46,6 @@ use crate::stp::message::MessageKind;
 
 use self::message::serialize::STMsg;
 use self::message::StMessage;
-use self::metrics::{TOTAL_STATE_SIZE, TOTAL_STATE_SIZE_ID};
 
 pub mod message;
 pub mod metrics;
@@ -94,7 +93,6 @@ struct PersistentCheckpoint<S: DivisibleState> {
     parts: KVDB,
     // list of parts we need in order to recover the state
     req_parts: Vec<Arc<S::PartDescription>>,
-    size: usize,
 }
 
 impl<S: DivisibleState> Debug for PersistentCheckpoint<S> {
@@ -117,7 +115,6 @@ impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
             req_parts: Default::default(),
             targets: vec![],
             parts: KVDB::new("checkpoint",vec!["state"]).unwrap(),
-            size: 0,
         }
     }
 }
@@ -131,7 +128,6 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             descriptor: None,
             targets: vec![],
             parts: KVDB::new(path,vec!["state"]).unwrap(),
-            size: 0,
         }
     }
 
@@ -177,8 +173,6 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
 
         let _ = self.parts.set_all("state", batch);
         
-        metric_increment(TOTAL_STATE_SIZE_ID, Some(self.parts.size()));
-
         Ok(())
     }
 
