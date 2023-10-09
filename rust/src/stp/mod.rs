@@ -761,7 +761,7 @@ where
             seq
         );
 
-        self.node.send(reply, header.from(), true);
+        self.node.send(reply, header.from(), true).unwrap();
     }
 
     pub fn request_state_descriptor<V>(&mut self, view: V)
@@ -854,7 +854,7 @@ where
 
         let st_frag = match message.kind() {
             MessageKind::ReqState(req_parts) => {
-                let parts = req_parts.iter().by_ref().as_slice();
+                let parts = req_parts.iter().as_slice();
                 self.checkpoint.get_parts(parts).unwrap()
             },
             _ => {
@@ -871,10 +871,8 @@ where
         );
 
         self.node.send(reply, header.from(), true).unwrap();
-
-        println!("process req state finished {:?}", start.elapsed());
-
         metric_duration(PROCESS_REQ_STATE_TIME_ID, start.elapsed());
+        println!("process req state finished {:?}", start.elapsed());
     }
 
     pub fn process_request_descriptor(&mut self, header: Header, message: StMessage<S>) {
@@ -1091,10 +1089,9 @@ where
 
                 let mut accepted_descriptor = Vec::new();
                 let mut accepted_parts = Vec::new();
-                println!("state transfer size {:?}",  state.st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>());
 
                 for received_part in state.st_frag.iter() {
-                    metric_increment(TOTAL_STATE_TRANSFERED_ID, Some(received_part.bytes().len() as u64));
+                    metric_increment(TOTAL_STATE_TRANSFERED_ID, Some(received_part.size()));
 
                     let part_hash = received_part.hash();
                     if self
@@ -1239,7 +1236,7 @@ where
         for state_desc in descriptor.chunks(INSTALL_CHUNK_SIZE) {
            // info!("{:?} // Installing parts {:?}", self.node.id(),state_desc);
             let st_frag = self.checkpoint.get_parts_by_ref(state_desc)?;
-            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>()));
+            metric_increment(TOTAL_STATE_INSTALLED_ID, Some(st_frag.iter().map(|f| f.size() as u64).sum::<u64>()));
 
             //println!("state install size {:?}", st_frag.iter().map(|f| f.bytes().len() as u64).sum::<u64>());
 
@@ -1249,22 +1246,22 @@ where
         }
 
 
-        self.checkpoint.seqno = self.largest_cid;
 
         self.install_channel
             .send(InstallStateMessage::Done)
             .unwrap();
 
+        self.checkpoint.seqno = self.largest_cid;
+        self.checkpoint.clear();
+        self.received_state_ids.clear();
 
         metric_duration(
             STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID,
             start_install.elapsed(),
         );
         metric_duration_end(STATE_TRANSFER_TIME_ID);
-        println!("state transfer finished {:?}", start_install.elapsed());
 
-        self.checkpoint.clear();
-        self.received_state_ids.clear();
+        println!("state transfer finished {:?}", start_install.elapsed());
 
         Ok(STResult::StateTransferFinished(self.checkpoint.get_seqno()))
     }
@@ -1333,6 +1330,7 @@ where
             self.checkpoint.update_descriptor(descriptor);
 
         }
+        metric_duration_end(CHECKPOINT_UPDATE_TIME_ID);
 
         if let StStatus::Nil = self.process_message_inner(view, StProgress::Nil) {
         } else {
@@ -1342,7 +1340,6 @@ where
             .wrapped(ErrorKind::Cst);
         }
 
-        metric_duration_end(CHECKPOINT_UPDATE_TIME_ID);
         Ok(())
     }
 }
