@@ -88,13 +88,13 @@ fn generate_log(id: u32) {
         .appender(Appender::builder().build("state_transfer", file_appender(id, "_state_transfer")))
         .appender(Appender::builder().filter(Box::new(ThresholdFilter::new(LevelFilter::Warn))).build("console", Box::new(console_appender)))
 
-        .logger(Logger::builder().appender("comm").build("atlas_communication", LevelFilter::Debug))
-        .logger(Logger::builder().appender("common").build("atlas_common", LevelFilter::Debug))
-        .logger(Logger::builder().appender("reconfig").build("atlas_reconfiguration", LevelFilter::Debug))
-        .logger(Logger::builder().appender("consensus").build("febft_pbft_consensus", LevelFilter::Debug))
-        .logger(Logger::builder().appender("log_transfer").build("atlas_log_transfer", LevelFilter::Debug))
-        .logger(Logger::builder().appender("state_transfer").build("febft_state_transfer", LevelFilter::Debug))
-        .build(Root::builder().appender("file").build(LevelFilter::Debug), ).wrapped(ErrorKind::MsgLog).unwrap();
+        .logger(Logger::builder().appender("comm").build("atlas_communication", LevelFilter::Warn))
+        .logger(Logger::builder().appender("common").build("atlas_common", LevelFilter::Warn))
+        .logger(Logger::builder().appender("reconfig").build("atlas_reconfiguration", LevelFilter::Warn))
+        .logger(Logger::builder().appender("consensus").build("febft_pbft_consensus", LevelFilter::Warn))
+        .logger(Logger::builder().appender("log_transfer").build("atlas_log_transfer", LevelFilter::Warn))
+        .logger(Logger::builder().appender("state_transfer").build("febft_state_transfer", LevelFilter::Warn))
+        .build(Root::builder().appender("file").build(LevelFilter::Warn), ).wrapped(ErrorKind::MsgLog).unwrap();
 
     let _handle = log4rs::init_config(config).wrapped(ErrorKind::MsgLog).unwrap();
 }
