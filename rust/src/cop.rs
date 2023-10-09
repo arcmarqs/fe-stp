@@ -380,12 +380,12 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..40000000 as u32 {
+    for u  in 0..40000000 as u64 {
 
         let i : u64 = rand.gen_range(1..100000000000);
 
         let kv ={
-             let id = id.0.to_be_bytes().to_vec();
+             let id = (id.0 as u64).to_be_bytes().to_vec();
              let rest = u.to_be_bytes().to_vec();
 
              [id,rest].concat()
@@ -406,6 +406,7 @@ fn run_client(client: SMRClient) {
             println!("state: {:?}", reply);
         }
     }
+
     for u in 0..100000 as u64 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = {Action::Read(kv.into_bytes())};
