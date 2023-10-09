@@ -139,11 +139,6 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         self.seqno
     }
 
-    pub fn clear(&mut self) {
-        self.req_parts = Vec::new();
-        self.targets = Vec::new();
-    }
-
     fn read_local_part(&self, part_id: &[u8]) -> Result<Option<S::StatePart>> {
         let key: Vec<u8> = bincode::serialize(part_id).expect("failed to serialize");
 
@@ -1252,7 +1247,6 @@ where
             .unwrap();
 
         self.checkpoint.seqno = self.largest_cid;
-        self.checkpoint.clear();
         self.received_state_ids.clear();
 
         metric_duration(
