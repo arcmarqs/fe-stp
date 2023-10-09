@@ -382,7 +382,7 @@ fn run_client(client: SMRClient) {
 
     for u  in 0..40000000 as u32 {
 
-        let i : u128 = rand.gen_range(1..1000000000);
+        let i : u64 = rand.gen_range(1..100000000000);
 
         let kv ={
              let id = id.0.to_be_bytes().to_vec();
@@ -390,8 +390,15 @@ fn run_client(client: SMRClient) {
 
              [id,rest].concat()
         };
+    
+        let request = if u % 3 == 0 && i % 2 == 0 {
+            Action::Remove(i.to_be_bytes().to_vec()) 
+        } else if i % 5 == 0 {
+            Action::Read(i.to_be_bytes().to_vec()) 
+        } else {
+            Action::Insert(i.to_be_bytes().to_vec(),kv) 
+        };
 
-        let request = Action::Insert(kv, i.to_be_bytes().to_vec());
 
         println!("{:?} // Sending req {:?}...", id, request);
 
@@ -399,7 +406,6 @@ fn run_client(client: SMRClient) {
             println!("state: {:?}", reply);
         }
     }
-
     for u in 0..100000 as u64 {
         let kv = format!("{}{}", id.0.to_string(), u.to_string());
         let request = {Action::Read(kv.into_bytes())};
