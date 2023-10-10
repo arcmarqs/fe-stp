@@ -385,7 +385,7 @@ fn run_client(client: SMRClient) {
 
         let kv ={
              let id = id.0.to_be_bytes().to_vec();
-             let rest = u.to_be_bytes().to_vec();
+             let rest = i.to_be_bytes().to_vec();
 
              [id,rest].concat()
         };
@@ -395,7 +395,7 @@ fn run_client(client: SMRClient) {
         } else if i % 5 == 0 {
             Action::Read(kv) 
         } else {
-            Action::Insert(kv,i.to_be_bytes().to_vec()) 
+            Action::Insert(kv,u.to_be_bytes().to_vec()) 
         };
 
 
