@@ -379,23 +379,23 @@ fn run_client(client: SMRClient) {
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
 
-    for u  in 0..40000000 as u64 {
+    for u  in 0..40000000 as u128 {
 
-        let i : u64 = rand.gen_range(1..100000000000);
+        let i : u32 = rand.gen_range(0..u32::MAX);
 
         let kv ={
-             let id = (id.0 as u64).to_be_bytes().to_vec();
+             let id = id.0.to_be_bytes().to_vec();
              let rest = u.to_be_bytes().to_vec();
 
              [id,rest].concat()
         };
     
         let request = if u % 3 == 0 && i % 2 == 0 {
-            Action::Remove(i.to_be_bytes().to_vec()) 
+            Action::Remove(kv) 
         } else if i % 5 == 0 {
-            Action::Read(i.to_be_bytes().to_vec()) 
+            Action::Read(kv) 
         } else {
-            Action::Insert(i.to_be_bytes().to_vec(),kv) 
+            Action::Insert(kv,i.to_be_bytes().to_vec()) 
         };
 
 
