@@ -51,7 +51,9 @@ pub mod message;
 pub mod metrics;
 
 //HOW MANY STATE PARTS TO INSTALL AT ONCE
-const INSTALL_CHUNK_SIZE: usize = 8192;
+const INSTALL_CHUNK_SIZE: usize = 6000;
+
+const STATE: &'static str = "state";
 
 // Split a slice into n slices, modified from https://users.rust-lang.org/t/how-to-split-a-slice-into-n-chunks/40008/5
 fn split_evenly<T>(slice: &[T], n: usize) -> impl Iterator<Item = &[T]> {
@@ -114,7 +116,7 @@ impl<S: DivisibleState> Default for PersistentCheckpoint<S> {
            // parts: Default::default(),
             req_parts: Default::default(),
             targets: vec![],
-            parts: KVDB::new("checkpoint",vec!["state"]).unwrap(),
+            parts: KVDB::new("checkpoint",vec![STATE]).unwrap(),
         }
     }
 }
@@ -127,7 +129,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             seqno: SeqNo::ZERO,
             descriptor: None,
             targets: vec![],
-            parts: KVDB::new(path,vec!["state"]).unwrap(),
+            parts: KVDB::new(path,vec![STATE]).unwrap(),
         }
     }
 
@@ -166,7 +168,7 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
             bincode::serialize(part).unwrap(),
         ));
 
-        let _ = self.parts.set_all("state", batch);
+        let _ = self.parts.set_all(STATE, batch);
         
         Ok(())
     }
@@ -176,12 +178,28 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         parts_desc: &[S::PartDescription],
     ) -> Result<Box<[S::StatePart]>> {
         // need to figure out what to do if the part read doesn't match the descriptor 
+  
+        let batch = parts_desc.iter().map(|part| (
+           STATE,bincode::serialize(part.id()).expect("failed to serialize")
+        ));
+
         let mut vec = Vec::new();
-        for part in parts_desc {
-            if let Some(p) = self.read_local_part(part.id())? {
-                vec.push(p);
+       let parts = self.parts.get_all(batch).expect("failed to get all parts");
+
+       for part in parts {
+        let state_part = match part.expect("invalid part") {
+            Some(buf) => {
+                let res = bincode::deserialize::<S::StatePart>(&buf)
+                    .wrapped(ErrorKind::CommunicationSerialize)
+                    .expect("failed to deserialize part");
+
+                res
             }
-        }
+            None => continue,
+        };
+
+        vec.push(state_part);
+       }
 
         Ok(vec.into_boxed_slice())
     }
@@ -191,14 +209,29 @@ impl<S: DivisibleState> PersistentCheckpoint<S> {
         parts_desc: &[Arc<S::PartDescription>],
     ) -> Result<Vec<S::StatePart>> {
         // need to figure out what to do if the part read doesn't match the descriptor 
-        let mut vec = Vec::new();
-        for part in parts_desc {
-            if let Some(p) = self.read_local_part(part.id())? {
-                vec.push(p);
-            }
+        let batch = parts_desc.iter().map(|part| (
+            STATE,bincode::serialize(part.id()).expect("failed to serialize")
+         ));
+ 
+         let mut vec = Vec::new();
+        let parts = self.parts.get_all(batch).expect("failed to get all parts");
+ 
+        for part in parts {
+         let state_part = match part.expect("invalid part") {
+             Some(buf) => {
+                 let res = bincode::deserialize::<S::StatePart>(&buf)
+                     .wrapped(ErrorKind::CommunicationSerialize)
+                     .expect("failed to deserialize part");
+ 
+                 res
+             }
+             None => continue,
+         };
+ 
+         vec.push(state_part);
         }
-
-        Ok(vec)
+ 
+         Ok(vec)
     }
 
     pub fn get_req_parts(&mut self) -> Vec<Arc<S::PartDescription>> {
