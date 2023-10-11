@@ -32,7 +32,7 @@ mprober-lib = "0.1.7"
 procinfo = "0.4.2"
 blake3 = "*"
 
-atlas-common = { path = "../../Atlas/atlas-common" }
+atlas-common = { path = "../../Atlas/atlas-common", features = ["rocksdb"]}
 atlas-communication = { path = "../../Atlas/atlas-communication" }
 atlas-execution = { path = "../../Atlas/atlas-execution", features = ["serialize_serde"] }
 atlas-core = { path = "../../Atlas/atlas-core" }
