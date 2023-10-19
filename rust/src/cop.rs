@@ -379,25 +379,19 @@ fn run_client(client: SMRClient) {
     println!("run client");
     let concurrent_client = ConcurrentClient::from_client(client, get_concurrent_rqs()).unwrap();
     let mut rand = rand::thread_rng();
-    for u  in 0..40000000 as u64{
 
-        let i : u32 = rand.gen_range(0..u32::MAX);
-        let key: [u8; 8] = rand::random();
-        let value: [u8; 16] = rand::random();
-       // let kv ={
-      //       let id = id.0.to_be_bytes().to_vec();
-      //       let rest = u.to_be_bytes().to_vec();
-      //          [id,rest].concat()
-    //    };
-    
-        let request = if u % 3 == 0 && i % 2 == 0 {
-            Action::Remove(key.to_vec()) 
-        } else if i % 5 == 0 {
-            Action::Read(key.to_vec()) 
-        } else {
-            Action::Insert(key.to_vec(),value.to_vec()) 
+    for u  in 0..40000000 as u32 {
+
+        let i : u128 = rand.gen_range(1..1000000000);
+
+        let kv ={
+             let id = id.0.to_be_bytes().to_vec();
+             let rest = u.to_be_bytes().to_vec();
+
+             [id,rest].concat()
         };
-
+    
+        let request = Action::Insert(kv, i.to_be_bytes().to_vec());
 
         println!("{:?} // Sending req {:?}...", id, request);
 
@@ -416,5 +410,4 @@ fn run_client(client: SMRClient) {
             println!("state: {:?}", reply);
         }
     }
-   
 }
